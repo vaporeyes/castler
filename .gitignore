@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.luarc.json
+
+# Love2D build artifacts
+*.love
+build/
+dist/
+*.app/
+
+# Logs / saves
+*.log
+saves/
+
+# OS junk
+Thumbs.db
+desktop.ini
