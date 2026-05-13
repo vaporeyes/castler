@@ -6,6 +6,9 @@ UI.__index = UI
 
 local SLOT_SIZE = 48
 local SLOT_GAP  = 6
+-- IDs above this are voxelizer-managed (per-sector lit colors from DOOM
+-- imports). The hotbar should never grow to show them.
+local HOTBAR_MAX_ID = 5
 local BLOCK_NAMES = {
     [1] = "Stone",
     [2] = "Wood",
@@ -15,9 +18,11 @@ local BLOCK_NAMES = {
 }
 
 local TOOL_LABELS = {
-    brush = "Brush",
-    line  = "Line",
-    rect  = "Rect",
+    brush  = "Brush",
+    line   = "Line",
+    rect   = "Rect",
+    box    = "Box",
+    sphere = "Sphere",
 }
 
 function UI.new(world, builder, renderer, grid)
@@ -61,10 +66,12 @@ function UI:draw()
     local sw, sh = love.graphics.getDimensions()
     local palette = self.world.PALETTE
 
-    -- Count slots (palette is sparse-but-dense-1..5).
+    -- Hotbar only ever shows the user-pickable IDs (1..HOTBAR_MAX_ID).
+    -- Sector-specific palette entries injected by the DOOM voxelizer live
+    -- well above this range and are not exposed for placement.
     local maxId = 0
     for id in pairs(palette) do
-        if id > maxId then maxId = id end
+        if id <= HOTBAR_MAX_ID and id > maxId then maxId = id end
     end
 
     local totalWidth = maxId * SLOT_SIZE + (maxId - 1) * SLOT_GAP
@@ -83,7 +90,13 @@ function UI:draw()
     local active = self.builder.activeBlockId
     local name = BLOCK_NAMES[active] or ("#" .. active)
     local toolLabel = TOOL_LABELS[self.builder.tool] or self.builder.tool
-    local pendingTag = self.builder.pending and "  (anchor set - click end point)" or ""
+    local pendingTag = ""
+    if self.builder.pending then
+        pendingTag = "  (anchor set - click end point)"
+        if self.builder.heightOffset and self.builder.heightOffset ~= 0 then
+            pendingTag = pendingTag .. string.format("  height %+d", self.builder.heightOffset)
+        end
+    end
     local statusY = y - 22
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.printf(name .. "  -  " .. toolLabel .. pendingTag, 0, statusY, sw, "center")
@@ -99,12 +112,30 @@ function UI:draw()
             string.format("Chunks %d/%d   Tris %d", drawn, total, t),
             120, 28)
     end
-    love.graphics.print("WASD pan  |  scroll zoom  |  RMB drag rotate", 10, 48)
-    love.graphics.print("LMB place  |  Shift+LMB remove  |  1-5 pick block", 10, 64)
-    love.graphics.print("B brush  |  L line  |  R rect  |  Esc cancel/quit", 10, 80)
+    local mode = GetCameraMode and GetCameraMode() or "rts"
+    if mode == "fly" then
+        love.graphics.print("FLY MODE - mouse looks  |  WASD strafe  |  Space/Ctrl up-down", 10, 48)
+        love.graphics.print("Shift = boost  |  F again returns to RTS", 10, 64)
+    else
+        love.graphics.print("WASD pan  |  scroll zoom  |  RMB drag rotate  |  F fly mode", 10, 48)
+        love.graphics.print("LMB place  |  Shift+LMB remove  |  1-5 pick block", 10, 64)
+    end
+    love.graphics.print("B brush  |  L line  |  R rect  |  X box  |  O sphere  |  Esc cancel", 10, 80)
     love.graphics.print("Hold Ctrl/Cmd on 2nd click to axis-lock line/rect", 10, 96)
+    love.graphics.print("Up/Down = adjust height during pending box/sphere/line", 10, 160)
     local gridLabel = (self.grid and self.grid.modeName) and self.grid:modeName() or "off"
     love.graphics.print(string.format("G grid (%s)", gridLabel), 10, 112)
+    love.graphics.print("Drop .WAD to import DOOM  |  Drop .castler to load save", 10, 128)
+    love.graphics.print("F5 quicksave  |  F9 quickload", 10, 144)
+
+    -- Transient import banner.
+    if GetImportStatus then
+        local msg = GetImportStatus()
+        if msg then
+            love.graphics.setColor(1, 0.95, 0.55, 1)
+            love.graphics.printf(msg, 0, sh * 0.5 - 90, sw, "center")
+        end
+    end
 
     love.graphics.pop()
 end

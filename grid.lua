@@ -111,8 +111,13 @@ function Grid:draw()
         love.graphics.setDepthMode()
     end
     love.graphics.setShader(self.shader)
-    self.shader:send("u_view", "column", view)
-    self.shader:send("u_proj", "column", proj)
+    self.shader:send("u_view",       "column", view)
+    self.shader:send("u_proj",       "column", proj)
+    -- Grid is a reference overlay; we don't want it fogged into the distance.
+    self.shader:send("u_fogColor",   {0, 0, 0})
+    self.shader:send("u_fogStart",   1)
+    self.shader:send("u_fogEnd",     2)
+    self.shader:send("u_fogEnabled", 0.0)
     love.graphics.draw(self.mesh)
     love.graphics.pop()
 end

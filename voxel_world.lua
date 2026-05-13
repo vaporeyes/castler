@@ -73,6 +73,13 @@ function VoxelWorld:setBlock(x, y, z, id)
     return true
 end
 
+-- Reset every cell to air. Faster than looping setBlock since we skip the
+-- bounds check on every write.
+function VoxelWorld:clear()
+    local data = self.data
+    for i = 1, self.size do data[i] = 0 end
+end
+
 -- Bulk iterator. Callback receives (x, y, z, id) for every solid block
 -- (id != 0). Traversal order is x-fastest for cache-friendly reads.
 function VoxelWorld:forEachSolid(callback)

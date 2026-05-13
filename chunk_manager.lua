@@ -180,6 +180,12 @@ function ChunkManager:regenerateChunk(chunk)
     chunk.mesh:setDrawRange(1, iCount)
 end
 
+-- Force every chunk to rebuild on the next flush. Used after bulk world
+-- mutations (e.g. importing a level) where per-cell markDirty would be wasteful.
+function ChunkManager:markAllDirty()
+    for _, chunk in pairs(self.chunks) do chunk.dirty = true end
+end
+
 function ChunkManager:flushDirty()
     for _, chunk in pairs(self.chunks) do
         if chunk.dirty then
@@ -188,11 +194,22 @@ function ChunkManager:flushDirty()
     end
 end
 
+-- DOOM-style "diminished lighting" via linear fog from u_fogStart..u_fogEnd.
+-- Fog color matches the scene clear color so geometry dissolves into the
+-- background instead of revealing a hard horizon.
+ChunkManager.FOG_COLOR = {0.06, 0.07, 0.10}
+ChunkManager.FOG_START = 40
+ChunkManager.FOG_END   = 150
+
 function ChunkManager:draw(viewMatrix, projectionMatrix)
     love.graphics.setDepthMode("less", true)
     love.graphics.setShader(self.shader)
-    self.shader:send("u_view", "column", viewMatrix)
-    self.shader:send("u_proj", "column", projectionMatrix)
+    self.shader:send("u_view",       "column", viewMatrix)
+    self.shader:send("u_proj",       "column", projectionMatrix)
+    self.shader:send("u_fogColor",   self.FOG_COLOR)
+    self.shader:send("u_fogStart",   self.FOG_START)
+    self.shader:send("u_fogEnd",     self.FOG_END)
+    self.shader:send("u_fogEnabled", 1.0)
 
     for _, chunk in pairs(self.chunks) do
         if chunk.mesh then

@@ -23,9 +23,11 @@ local CUBE_EDGES = {
     {1,5}, {2,6}, {3,7}, {4,8},  -- along Z
 }
 
-local TOOL_BRUSH = "brush"
-local TOOL_LINE  = "line"
-local TOOL_RECT  = "rect"
+local TOOL_BRUSH  = "brush"
+local TOOL_LINE   = "line"
+local TOOL_RECT   = "rect"
+local TOOL_BOX    = "box"
+local TOOL_SPHERE = "sphere"
 
 function BuildManager.new(world, renderer, camera, stability, particles)
     local self = setmetatable({}, BuildManager)
@@ -38,6 +40,11 @@ function BuildManager.new(world, renderer, camera, stability, particles)
     self.hit = nil          -- {x, y, z, nx, ny, nz}
     self.tool = TOOL_BRUSH
     self.pending = nil      -- {x, y, z, axis, mode}
+    -- Manual Y offset applied to the second-click end point. Lets the user
+    -- build vertical extent for box/sphere/line ops when there's nothing
+    -- above the floor to point at. Reset whenever an op completes/cancels.
+    self.heightOffset = 0
+    self._heightAccum = 0
     return self
 end
 
@@ -47,12 +54,28 @@ function BuildManager:setTool(tool)
     if tool ~= self.tool then
         self.tool = tool
         self.pending = nil
+        self.heightOffset = 0
+        self._heightAccum = 0
     end
 end
 
 function BuildManager:cancelPending()
-    if self.pending then self.pending = nil; return true end
+    if self.pending then
+        self.pending = nil
+        self.heightOffset = 0
+        self._heightAccum = 0
+        return true
+    end
     return false
+end
+
+local function toolUsesHeightOffset(tool)
+    return tool == TOOL_BOX or tool == TOOL_SPHERE or tool == TOOL_LINE
+end
+
+function BuildManager:nudgeHeight(delta)
+    if not self.pending or not toolUsesHeightOffset(self.tool) then return end
+    self.heightOffset = self.heightOffset + delta
 end
 
 local function unprojectRay(camera, mouseX, mouseY, screenW, screenH)
@@ -151,10 +174,39 @@ local function dda(world, origin, dir, maxDist)
     return nil
 end
 
-function BuildManager:update()
+function BuildManager:update(dt)
+    -- Smooth hold-to-repeat for height adjustment while an op is pending.
+    if self.pending and toolUsesHeightOffset(self.tool) and love.keyboard then
+        local rate = 10  -- cells per second
+        local accumDelta = 0
+        if love.keyboard.isDown("up")   or love.keyboard.isDown("pageup")   then accumDelta = accumDelta + 1 end
+        if love.keyboard.isDown("down") or love.keyboard.isDown("pagedown") then accumDelta = accumDelta - 1 end
+        if accumDelta ~= 0 then
+            self._heightAccum = self._heightAccum + accumDelta * rate * (dt or 0)
+            while self._heightAccum >= 1 do
+                self.heightOffset = self.heightOffset + 1
+                self._heightAccum = self._heightAccum - 1
+            end
+            while self._heightAccum <= -1 do
+                self.heightOffset = self.heightOffset - 1
+                self._heightAccum = self._heightAccum + 1
+            end
+        else
+            self._heightAccum = 0
+        end
+    end
+
     if not love.mouse then self.hit = nil; return end
-    local mx, my = love.mouse.getPosition()
     local sw, sh = love.graphics.getDimensions()
+    local mx, my
+    -- When the OS cursor is hidden (fly mode), aim from the screen center so
+    -- the ghost cube sits where the user is looking instead of at a stale
+    -- cursor position the user can't see.
+    if love.mouse.getRelativeMode and love.mouse.getRelativeMode() then
+        mx, my = sw * 0.5, sh * 0.5
+    else
+        mx, my = love.mouse.getPosition()
+    end
     local origin, dir = unprojectRay(self.camera, mx, my, sw, sh)
     if not origin then self.hit = nil; return end
     self.hit = dda(self.world, origin, dir, MAX_REACH)
@@ -243,6 +295,42 @@ local function collectLine(x1, y1, z1, x2, y2, z2, out)
     end
 end
 
+-- Solid 3D box between two opposite corners (inclusive on all six faces).
+local function collectBox(x1, y1, z1, x2, y2, z2, out)
+    local xLo, xHi = math.min(x1, x2), math.max(x1, x2)
+    local yLo, yHi = math.min(y1, y2), math.max(y1, y2)
+    local zLo, zHi = math.min(z1, z2), math.max(z1, z2)
+    for x = xLo, xHi do
+        for y = yLo, yHi do
+            for z = zLo, zHi do
+                out[#out + 1] = x; out[#out + 1] = y; out[#out + 1] = z
+            end
+        end
+    end
+end
+
+-- Solid sphere centered on (cx, cy, cz). Radius is the integer distance to the
+-- second-click cell, so a single click after the anchor produces a near-1 ball
+-- and dragging outward grows it predictably.
+local function collectSphere(cx, cy, cz, radius, out)
+    if radius < 1 then radius = 1 end
+    local r2 = radius * radius
+    local iR = math.ceil(radius)
+    for dz = -iR, iR do
+        local z = cz + dz
+        for dy = -iR, iR do
+            local y = cy + dy
+            for dx = -iR, iR do
+                if dx*dx + dy*dy + dz*dz <= r2 then
+                    out[#out + 1] = cx + dx
+                    out[#out + 1] = y
+                    out[#out + 1] = z
+                end
+            end
+        end
+    end
+end
+
 -- Rect lies on the plane perpendicular to `axis`. The fixed coord is taken
 -- from the start point; the other two are taken from min..max of start/end.
 local function collectRect(x1, y1, z1, x2, y2, z2, axis, out)
@@ -272,6 +360,13 @@ function BuildManager:cellsForOperation(endX, endY, endZ, axis)
     end
     local p = self.pending
     local locked = axisLockHeld()
+    -- Apply the manual Y offset to the end point for tools that support it.
+    -- Lets the user dial in vertical extent for box/sphere/line ops when the
+    -- raycast can only target floor tiles.
+    if toolUsesHeightOffset(self.tool) then
+        endY = endY + self.heightOffset
+    end
+
     if self.tool == TOOL_LINE then
         if locked then
             endX, endY, endZ = snapLineAxis(p.x, p.y, p.z, endX, endY, endZ)
@@ -283,6 +378,12 @@ function BuildManager:cellsForOperation(endX, endY, endZ, axis)
             endX, endY, endZ = snapRectAxis(p.x, p.y, p.z, endX, endY, endZ, planeAxis)
         end
         collectRect(p.x, p.y, p.z, endX, endY, endZ, planeAxis, cells)
+    elseif self.tool == TOOL_BOX then
+        collectBox(p.x, p.y, p.z, endX, endY, endZ, cells)
+    elseif self.tool == TOOL_SPHERE then
+        local dx, dy, dz = endX - p.x, endY - p.y, endZ - p.z
+        local r = math.floor(math.sqrt(dx*dx + dy*dy + dz*dz) + 0.5)
+        collectSphere(p.x, p.y, p.z, r, cells)
     end
     return cells
 end
@@ -388,11 +489,40 @@ function BuildManager:draw()
 
     local cells = self:cellsForOperation(endX, endY, endZ, nx and normalToAxis(nx, ny, nz) or nil)
 
+    -- Sphere/box previews can be thousands of cells. To keep the wireframe
+    -- pass cheap, when the result is large we render only "shell" cells -
+    -- cells that are missing at least one neighbor inside the set. The result
+    -- is visually identical (the interior cubes would have been hidden behind
+    -- the outer ones anyway) at a fraction of the line-draw cost.
+    local PREVIEW_FULL_CAP = 500
+    local total = #cells / 3
+    local previewCells = cells
+    if total > PREVIEW_FULL_CAP then
+        local present = {}
+        for i = 1, #cells, 3 do
+            present[cells[i] .. "," .. cells[i+1] .. "," .. cells[i+2]] = true
+        end
+        previewCells = {}
+        for i = 1, #cells, 3 do
+            local x, y, z = cells[i], cells[i+1], cells[i+2]
+            if not (present[(x+1)..","..y..","..z]
+                and present[(x-1)..","..y..","..z]
+                and present[x..","..(y+1)..","..z]
+                and present[x..","..(y-1)..","..z]
+                and present[x..","..y..","..(z+1)]
+                and present[x..","..y..","..(z-1)]) then
+                previewCells[#previewCells+1] = x
+                previewCells[#previewCells+1] = y
+                previewCells[#previewCells+1] = z
+            end
+        end
+    end
+
     love.graphics.push("all")
     love.graphics.setDepthMode()
     love.graphics.setLineWidth(2)
-    for i = 1, #cells, 3 do
-        drawGhostCube(mvp, sw, sh, cells[i], cells[i+1], cells[i+2], colorR, colorG, colorB)
+    for i = 1, #previewCells, 3 do
+        drawGhostCube(mvp, sw, sh, previewCells[i], previewCells[i+1], previewCells[i+2], colorR, colorG, colorB)
     end
 
     -- Highlight the pending start point with a thicker outline so the anchor is obvious.
@@ -431,6 +561,8 @@ function BuildManager:mousepressed(_, _, button)
     local cells = self:cellsForOperation(x, y, z, p.axis)
     self:applyCells(cells, p.mode)
     self.pending = nil
+    self.heightOffset = 0
+    self._heightAccum = 0
 end
 
 BuildManager.TOOLS = {

@@ -4,22 +4,34 @@
 local VoxelWorld   = require("voxel_world")
 local ChunkManager = require("chunk_manager")
 local RTSCamera    = require("rts_camera")
+local FlyCamera    = require("fly_camera")
 local Stability    = require("structural_integrity")
 local Particles    = require("particles")
 local BuildManager = require("build_manager")
 local Grid         = require("grid")
 local UI           = require("ui")
+local Wad          = require("wad_loader")
+local Voxelizer    = require("doom_voxelizer")
+local WorldIO      = require("world_io")
+
+local QUICKSAVE_FILE = "quicksave.castler"
 
 local WORLD_W, WORLD_H, WORLD_D = 128, 64, 128
 
 local world
 local renderer
-local camera
+local camera         -- RTS orbit camera
+local flyCam         -- First-person fly camera
+local activeCam      -- Whichever one is currently driving view + input
+local cameraMode = "rts"
 local stability
 local particles
 local builder
 local grid
 local ui
+local lastImportMsg = nil
+local lastImportMsgUntil = 0
+local playerStart = nil  -- set by DOOM import; pressing F jumps fly cam here
 
 local function buildScene()
     -- Small reference castle near the world center so chunking is obvious.
@@ -66,6 +78,8 @@ function love.load()
         target   = {WORLD_W / 2, 0, WORLD_D / 2},
         distance = 60,
     })
+    flyCam    = FlyCamera.new({pos = {WORLD_W / 2, 16, WORLD_D / 2}})
+    activeCam = camera
     stability = Stability.new(world)
     particles = Particles.new()
     builder   = BuildManager.new(world, renderer, camera, stability, particles)
@@ -73,8 +87,33 @@ function love.load()
     ui        = UI.new(world, builder, renderer, grid)
 end
 
+local function setCameraMode(mode)
+    if mode == cameraMode then return end
+    if mode == "fly" then
+        if playerStart then
+            flyCam.pos = {playerStart.x, playerStart.y, playerStart.z}
+            flyCam.yaw = playerStart.yaw
+            flyCam.pitch = 0
+        else
+            flyCam:syncFromRTS(camera)
+        end
+        flyCam:activate()
+        activeCam = flyCam
+    else
+        flyCam:deactivate()
+        activeCam = camera
+    end
+    cameraMode = mode
+    builder.camera = activeCam
+    grid.camera    = activeCam
+    -- Any in-progress two-click op carried camera state; cancel for safety.
+    builder:cancelPending()
+end
+
+function GetCameraMode() return cameraMode end
+
 function love.update(dt)
-    camera:update(dt)
+    activeCam:update(dt)
     builder:update(dt)
     particles:update(dt)
 end
@@ -83,8 +122,8 @@ function love.draw()
     love.graphics.clear(0.10, 0.12, 0.18, 1, true, true)
 
     local w, h = love.graphics.getDimensions()
-    local view = camera:viewMatrix()
-    local proj = camera:projectionMatrix(w / h)
+    local view = activeCam:viewMatrix()
+    local proj = activeCam:projectionMatrix(w / h)
 
     renderer:draw(view, proj)
     grid:draw()
@@ -98,10 +137,40 @@ function love.keypressed(key)
         if not builder:cancelPending() then love.event.quit() end
         return
     end
-    if key == "b" then builder:setTool("brush"); return end
-    if key == "l" then builder:setTool("line");  return end
-    if key == "r" then builder:setTool("rect");  return end
+    if key == "b" then builder:setTool("brush");  return end
+    if key == "l" then builder:setTool("line");   return end
+    if key == "r" then builder:setTool("rect");   return end
+    if key == "x" then builder:setTool("box");    return end
+    if key == "o" then builder:setTool("sphere"); return end
     if key == "g" then grid:cycle();              return end
+    if key == "f" then
+        setCameraMode(cameraMode == "fly" and "rts" or "fly")
+        return
+    end
+    if key == "f5" then
+        local ok, size = WorldIO.save(world, QUICKSAVE_FILE)
+        if ok then
+            showStatus(string.format("Saved %s (%.1f KB)", QUICKSAVE_FILE, size / 1024), 4)
+        else
+            showStatus("Save failed: " .. tostring(size))
+        end
+        return
+    end
+    if key == "f9" then
+        if not love.filesystem.getInfo(QUICKSAVE_FILE) then
+            showStatus("No quicksave found - press F5 first")
+            return
+        end
+        local blob = love.filesystem.read(QUICKSAVE_FILE)
+        local ok, err = WorldIO.load(world, renderer, blob)
+        if ok then
+            playerStart = nil  -- save doesn't preserve player-start metadata
+            showStatus("Loaded " .. QUICKSAVE_FILE, 4)
+        else
+            showStatus("Load failed: " .. tostring(err))
+        end
+        return
+    end
 
     local n = tonumber(key)
     if n and n >= 1 and n <= 5 then
@@ -109,7 +178,65 @@ function love.keypressed(key)
     end
 end
 
-function love.mousepressed(x, y, b)   camera:mousepressed(x, y, b); builder:mousepressed(x, y, b) end
-function love.mousereleased(x, y, b)  camera:mousereleased(x, y, b) end
-function love.mousemoved(x, y, dx, dy) camera:mousemoved(x, y, dx, dy) end
-function love.wheelmoved(x, y)        camera:wheelmoved(x, y)        end
+function love.mousepressed(x, y, b)   activeCam:mousepressed(x, y, b); builder:mousepressed(x, y, b) end
+function love.mousereleased(x, y, b)  activeCam:mousereleased(x, y, b) end
+function love.mousemoved(x, y, dx, dy) activeCam:mousemoved(x, y, dx, dy) end
+function love.wheelmoved(x, y)        activeCam:wheelmoved(x, y)        end
+
+local function showStatus(msg, seconds)
+    lastImportMsg = msg
+    lastImportMsgUntil = love.timer.getTime() + (seconds or 5)
+end
+
+function love.filedropped(file)
+    file:open("r")
+    local data = file:read()
+    file:close()
+
+    -- Castler save file: load it and we're done.
+    if WorldIO.isSave(data) then
+        local ok, err = WorldIO.load(world, renderer, data)
+        if ok then
+            playerStart = nil
+            showStatus("Loaded " .. file:getFilename(), 5)
+        else
+            showStatus("Load failed: " .. tostring(err))
+        end
+        return
+    end
+
+    local level, err = Wad.loadLevel(data)
+    if not level then
+        showStatus("Import failed: " .. tostring(err))
+        return
+    end
+
+    local ok, result, importedStart = pcall(Voxelizer.import, world, renderer, level)
+    if not ok then
+        showStatus("Voxelize failed: " .. tostring(result))
+        return
+    end
+
+    -- Recenter cameras on the imported map.
+    camera.targetPos = {world.width / 2, 0, world.depth / 2}
+    camera.distance = math.max(world.width, world.depth) * 0.7
+    playerStart = importedStart  -- nil if the WAD had no THING type 1
+    if playerStart then
+        flyCam.pos = {playerStart.x, playerStart.y, playerStart.z}
+        flyCam.yaw = playerStart.yaw
+        flyCam.pitch = 0
+    else
+        flyCam.pos = {world.width / 2, math.max(8, world.height * 0.3), world.depth / 2}
+    end
+
+    showStatus(string.format("Imported %s (%d sectors, %d linedefs)",
+        level.name, #level.sectors, #level.linedefs), 8)
+end
+
+-- Expose a status getter so the UI can render the import banner.
+function GetImportStatus()
+    if lastImportMsg and love.timer.getTime() < lastImportMsgUntil then
+        return lastImportMsg
+    end
+    return nil
+end
