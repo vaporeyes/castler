@@ -29,13 +29,14 @@ local TOOL_RECT   = "rect"
 local TOOL_BOX    = "box"
 local TOOL_SPHERE = "sphere"
 
-function BuildManager.new(world, renderer, camera, stability, particles)
+function BuildManager.new(world, renderer, camera, stability, particles, undo)
     local self = setmetatable({}, BuildManager)
     self.world = world
     self.renderer = renderer
     self.camera = camera
     self.stability = stability
     self.particles = particles
+    self.undo = undo
     self.activeBlockId = 1
     self.hit = nil          -- {x, y, z, nx, ny, nz}
     self.tool = TOOL_BRUSH
@@ -394,6 +395,9 @@ function BuildManager:applyCells(cells, mode)
     local changed = false
     local id = self.activeBlockId
     local renderer = self.renderer
+    local undo = self.undo
+    if undo then undo:beginOp() end
+
     if mode == "remove" then
         for i = 1, #cells, 3 do
             local x, y, z = cells[i], cells[i+1], cells[i+2]
@@ -402,6 +406,7 @@ function BuildManager:applyCells(cells, mode)
                 if existing ~= 0 then
                     local col = world.PALETTE[existing] or {1,1,1}
                     world:setBlock(x, y, z, 0)
+                    if undo then undo:recordChange(x, y, z, existing, 0) end
                     renderer:markDirty(x, y, z)
                     self.particles:spawnBlock(x, y, z, col)
                     changed = true
@@ -413,9 +418,14 @@ function BuildManager:applyCells(cells, mode)
                 local x, y, z = cells[i], cells[i+1], cells[i+2]
                 local collapsed = self.stability:checkStability(x, y, z)
                 for j = 1, #collapsed, 4 do
-                    local cx, cy, cz = collapsed[j], collapsed[j+1], collapsed[j+2]
+                    local cx = collapsed[j]
+                    local cy = collapsed[j+1]
+                    local cz = collapsed[j+2]
+                    local oldId = collapsed[j+3]
+                    if undo then undo:recordChange(cx, cy, cz, oldId, 0) end
                     renderer:markDirty(cx, cy, cz)
-                    self.particles:spawnBlock(cx, cy, cz, collapsed[j+3])
+                    local col = world.PALETTE[oldId] or {1, 1, 1}
+                    self.particles:spawnBlock(cx, cy, cz, col)
                 end
             end
         end
@@ -424,6 +434,7 @@ function BuildManager:applyCells(cells, mode)
             local x, y, z = cells[i], cells[i+1], cells[i+2]
             if world:inBounds(x, y, z) and world:getBlock(x, y, z) == 0 then
                 if world:setBlock(x, y, z, id) then
+                    if undo then undo:recordChange(x, y, z, 0, id) end
                     renderer:markDirty(x, y, z)
                     changed = true
                 end
@@ -431,6 +442,7 @@ function BuildManager:applyCells(cells, mode)
         end
     end
     if changed then renderer:flushDirty() end
+    if undo then undo:endOp() end
     return changed
 end
 

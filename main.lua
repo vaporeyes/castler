@@ -7,6 +7,7 @@ local RTSCamera    = require("rts_camera")
 local FlyCamera    = require("fly_camera")
 local Stability    = require("structural_integrity")
 local Particles    = require("particles")
+local UndoManager  = require("undo_manager")
 local BuildManager = require("build_manager")
 local Grid         = require("grid")
 local UI           = require("ui")
@@ -29,6 +30,7 @@ local particles
 local builder
 local grid
 local ui
+local undoManager
 local lastImportMsg = nil
 local lastImportMsgUntil = 0
 local playerStart = nil  -- set by DOOM import; pressing F jumps fly cam here
@@ -80,11 +82,12 @@ function love.load()
     })
     flyCam    = FlyCamera.new({pos = {WORLD_W / 2, 16, WORLD_D / 2}})
     activeCam = camera
-    stability = Stability.new(world)
-    particles = Particles.new()
-    builder   = BuildManager.new(world, renderer, camera, stability, particles)
-    grid      = Grid.new(world, camera, renderer.chunkSize)
-    ui        = UI.new(world, builder, renderer, grid)
+    stability   = Stability.new(world)
+    particles   = Particles.new()
+    undoManager = UndoManager.new(world, renderer)
+    builder     = BuildManager.new(world, renderer, camera, stability, particles, undoManager)
+    grid        = Grid.new(world, camera, renderer.chunkSize)
+    ui          = UI.new(world, builder, renderer, grid)
 end
 
 local function setCameraMode(mode)
@@ -110,6 +113,14 @@ local function setCameraMode(mode)
     builder:cancelPending()
 end
 
+-- Defined here (before any callback that references it) so the identifier
+-- resolves to this local. `local function` declared after callbacks would
+-- compile to a nil global lookup inside those callbacks.
+local function showStatus(msg, seconds)
+    lastImportMsg = msg
+    lastImportMsgUntil = love.timer.getTime() + (seconds or 5)
+end
+
 function GetCameraMode() return cameraMode end
 
 function love.update(dt)
@@ -132,9 +143,33 @@ function love.draw()
     ui:draw()
 end
 
+local function modHeld()
+    return love.keyboard.isDown("lctrl") or love.keyboard.isDown("rctrl")
+        or love.keyboard.isDown("lgui")  or love.keyboard.isDown("rgui")
+end
+
+local function shiftDown()
+    return love.keyboard.isDown("lshift") or love.keyboard.isDown("rshift")
+end
+
 function love.keypressed(key)
     if key == "escape" then
         if not builder:cancelPending() then love.event.quit() end
+        return
+    end
+    if key == "z" and modHeld() then
+        if shiftDown() then
+            local ok, n = undoManager:redo()
+            showStatus(ok and string.format("Redo (%d cells)", n) or "Nothing to redo", 2)
+        else
+            local ok, n = undoManager:undo()
+            showStatus(ok and string.format("Undo (%d cells)", n) or "Nothing to undo", 2)
+        end
+        return
+    end
+    if key == "y" and modHeld() then
+        local ok, n = undoManager:redo()
+        showStatus(ok and string.format("Redo (%d cells)", n) or "Nothing to redo", 2)
         return
     end
     if key == "b" then builder:setTool("brush");  return end
@@ -165,6 +200,7 @@ function love.keypressed(key)
         local ok, err = WorldIO.load(world, renderer, blob)
         if ok then
             playerStart = nil  -- save doesn't preserve player-start metadata
+            undoManager:clear()
             showStatus("Loaded " .. QUICKSAVE_FILE, 4)
         else
             showStatus("Load failed: " .. tostring(err))
@@ -183,11 +219,6 @@ function love.mousereleased(x, y, b)  activeCam:mousereleased(x, y, b) end
 function love.mousemoved(x, y, dx, dy) activeCam:mousemoved(x, y, dx, dy) end
 function love.wheelmoved(x, y)        activeCam:wheelmoved(x, y)        end
 
-local function showStatus(msg, seconds)
-    lastImportMsg = msg
-    lastImportMsgUntil = love.timer.getTime() + (seconds or 5)
-end
-
 function love.filedropped(file)
     file:open("r")
     local data = file:read()
@@ -198,6 +229,7 @@ function love.filedropped(file)
         local ok, err = WorldIO.load(world, renderer, data)
         if ok then
             playerStart = nil
+            undoManager:clear()
             showStatus("Loaded " .. file:getFilename(), 5)
         else
             showStatus("Load failed: " .. tostring(err))
@@ -221,6 +253,7 @@ function love.filedropped(file)
     camera.targetPos = {world.width / 2, 0, world.depth / 2}
     camera.distance = math.max(world.width, world.depth) * 0.7
     playerStart = importedStart  -- nil if the WAD had no THING type 1
+    undoManager:clear()
     if playerStart then
         flyCam.pos = {playerStart.x, playerStart.y, playerStart.z}
         flyCam.yaw = playerStart.yaw

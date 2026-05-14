@@ -22,10 +22,11 @@ function Stability.new(world)
     return self
 end
 
--- Returns a flat list { x1,y1,z1,id1, x2,y2,z2,id2, ... } of blocks that fell.
+-- Returns a flat list { x,y,z,id, x,y,z,id, ... } of blocks that fell. The
+-- `id` is the BLOCK ID before collapse so callers can record undo state and
+-- look up the particle color from the palette themselves.
 function Stability:checkStability(rx, ry, rz)
     local world = self.world
-    local palette = world.PALETTE
     local visited = {}
     local collapsed = {}
     local queue = self.queue
@@ -85,12 +86,11 @@ function Stability:checkStability(rx, ry, rz)
                         local cy = component[i + 1]
                         local cz = component[i + 2]
                         local id = world:getBlock(cx, cy, cz)
-                        local col = palette[id] or {1, 1, 1}
                         world:setBlock(cx, cy, cz, 0)
                         collapsed[#collapsed + 1] = cx
                         collapsed[#collapsed + 1] = cy
                         collapsed[#collapsed + 1] = cz
-                        collapsed[#collapsed + 1] = col
+                        collapsed[#collapsed + 1] = id
                     end
                 end
             end

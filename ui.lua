@@ -126,7 +126,7 @@ function UI:draw()
     local gridLabel = (self.grid and self.grid.modeName) and self.grid:modeName() or "off"
     love.graphics.print(string.format("G grid (%s)", gridLabel), 10, 112)
     love.graphics.print("Drop .WAD to import DOOM  |  Drop .castler to load save", 10, 128)
-    love.graphics.print("F5 quicksave  |  F9 quickload", 10, 144)
+    love.graphics.print("F5 quicksave  |  F9 quickload  |  Ctrl+Z undo  |  Ctrl+Shift+Z redo", 10, 144)
 
     -- Transient import banner.
     if GetImportStatus then
