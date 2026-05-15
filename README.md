@@ -46,8 +46,12 @@ The window opens at 1280x720 with depth buffer enabled (see `conf.lua`).
 - Chunked rendering: 16-cell cubes, one Love2D `Mesh` per chunk. Edits dirty only
   the affected chunk plus any face-adjacent chunk across a seam, so rebuilds stay
   local. 256 chunks total; most stay empty (no mesh, zero draw call) until built into.
-- Per-face shading baked into vertex colors (top 1.0, sides 0.8, front/back 0.65,
-  bottom 0.55) so geometry reads without a real lighting pass.
+- Lighting baked into vertex colors at mesh-gen time (no per-pixel lighting
+  pass): a fixed sun direction gives each face `ambient + diffuse * max(0,
+  dot(normal, sun))`, multiplied by per-vertex ambient occlusion. AO darkens
+  inner corners and crevices by sampling the three voxels around each face
+  corner (classic Minecraft AO), with the quad diagonal flipped on
+  anisotropic corners to avoid interpolation seams.
 - Distance fog in the fragment shader fades distant geometry toward the scene
   background, giving DOOM-like depth.
 
@@ -241,6 +245,7 @@ so the imported map reads the same way as the DOOM editor's wireframe view
 | Up / Down arrows | Adjust pending op height offset                 |
 | Ctrl / Cmd       | Axis-lock during pending Line/Rect second click |
 | G                | Grid: off / overlay / occluded                  |
+| J                | Cycle sun position (re-bakes lighting)          |
 | F                | Enter first-person (walk)                       |
 | F5 / F9          | Quicksave / quickload                           |
 | Ctrl+Z / Y / Shift+Z | Undo / redo                                 |

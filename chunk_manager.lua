@@ -12,20 +12,81 @@ local VERTEX_FORMAT = {
     {"VertexColor",    "float", 4},
 }
 
-local FACE_SHADE = {
-    px = 0.80, nx = 0.80,
-    py = 1.00, ny = 0.55,
-    pz = 0.65, nz = 0.65,
+-- Directional shade: a sun gives each face a brightness from
+-- ambient + diffuse * max(0, dot(faceNormal, sunDir)). The sun direction is
+-- mutable (see ChunkManager:setSun); changing it re-bakes all chunk meshes
+-- since lighting is baked into vertex colors at mesh-gen time.
+local SUN_DIR = {0.40, 0.86, 0.30}  -- points up-and-toward-front
+do
+    local m = math.sqrt(SUN_DIR[1]^2 + SUN_DIR[2]^2 + SUN_DIR[3]^2)
+    SUN_DIR[1], SUN_DIR[2], SUN_DIR[3] = SUN_DIR[1]/m, SUN_DIR[2]/m, SUN_DIR[3]/m
+end
+local AMBIENT = 0.48
+local DIFFUSE = 0.52
+
+-- Ambient occlusion: per-vertex darkening from how many of the three voxels
+-- around that corner (on the face's outward side) are solid. Classic
+-- "Minecraft AO" - levels 0..3 map to these multipliers.
+local AO_MUL = {[0] = 0.42, [1] = 0.62, [2] = 0.81, [3] = 1.0}
+
+local function aoLevel(s1, s2, c)
+    if s1 and s2 then return 0 end  -- pinched corner, fully occluded
+    local n = (s1 and 1 or 0) + (s2 and 1 or 0) + (c and 1 or 0)
+    return 3 - n
+end
+
+-- Base faces with their winding preserved exactly (do not reorder verts -
+-- index emission below depends on this CCW order for correct culling).
+local FACE_DEFS = {
+    {n = { 1, 0, 0}, verts = {{1,0,0},{1,0,1},{1,1,1},{1,1,0}}},
+    {n = {-1, 0, 0}, verts = {{0,0,1},{0,0,0},{0,1,0},{0,1,1}}},
+    {n = { 0, 1, 0}, verts = {{0,1,0},{0,1,1},{1,1,1},{1,1,0}}},
+    {n = { 0,-1, 0}, verts = {{0,0,1},{0,0,0},{1,0,0},{1,0,1}}},
+    {n = { 0, 0, 1}, verts = {{1,0,1},{0,0,1},{0,1,1},{1,1,1}}},
+    {n = { 0, 0,-1}, verts = {{0,0,0},{1,0,0},{1,1,0},{0,1,0}}},
 }
 
-local FACES = {
-    {dx= 1, dy= 0, dz= 0, shade=FACE_SHADE.px, verts={{1,0,0},{1,0,1},{1,1,1},{1,1,0}}},
-    {dx=-1, dy= 0, dz= 0, shade=FACE_SHADE.nx, verts={{0,0,1},{0,0,0},{0,1,0},{0,1,1}}},
-    {dx= 0, dy= 1, dz= 0, shade=FACE_SHADE.py, verts={{0,1,0},{0,1,1},{1,1,1},{1,1,0}}},
-    {dx= 0, dy=-1, dz= 0, shade=FACE_SHADE.ny, verts={{0,0,1},{0,0,0},{1,0,0},{1,0,1}}},
-    {dx= 0, dy= 0, dz= 1, shade=FACE_SHADE.pz, verts={{1,0,1},{0,0,1},{0,1,1},{1,1,1}}},
-    {dx= 0, dy= 0, dz=-1, shade=FACE_SHADE.nz, verts={{0,0,0},{1,0,0},{1,1,0},{0,1,0}}},
-}
+-- Build the runtime FACES table: per-face directional shade plus, for each of
+-- the 4 vertices, the three block-relative offsets (side1, side2, corner) to
+-- sample for ambient occlusion.
+-- Geometry/AO is sun-independent and built once. `shade` is filled in by
+-- computeFaceShades() and re-filled whenever the sun moves.
+local FACES = {}
+for _, fd in ipairs(FACE_DEFS) do
+    local n = fd.n
+
+    -- The two axes the face lies in (where the normal component is zero).
+    local axisA, axisB
+    for a = 1, 3 do
+        if n[a] == 0 then
+            if not axisA then axisA = a else axisB = a end
+        end
+    end
+
+    local face = { dx = n[1], dy = n[2], dz = n[3], shade = 1, verts = {}, ao = {} }
+    for v = 1, 4 do
+        local vp = fd.verts[v]
+        face.verts[v] = vp
+        local sA = (vp[axisA] == 1) and 1 or -1
+        local sB = (vp[axisB] == 1) and 1 or -1
+        local o1 = {n[1], n[2], n[3]}; o1[axisA] = o1[axisA] + sA
+        local o2 = {n[1], n[2], n[3]}; o2[axisB] = o2[axisB] + sB
+        local oc = {n[1], n[2], n[3]}; oc[axisA] = oc[axisA] + sA; oc[axisB] = oc[axisB] + sB
+        face.ao[v] = { o1, o2, oc }
+    end
+    FACES[#FACES + 1] = face
+end
+
+-- (Re)compute per-face directional brightness from the current SUN_DIR.
+local function computeFaceShades()
+    for i = 1, #FACES do
+        local f = FACES[i]
+        local d = f.dx*SUN_DIR[1] + f.dy*SUN_DIR[2] + f.dz*SUN_DIR[3]
+        if d < 0 then d = 0 end
+        f.shade = math.min(1, AMBIENT + DIFFUSE * d)
+    end
+end
+computeFaceShades()
 
 local NEIGHBOR_OFFSETS = {
     {1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1},
@@ -133,22 +194,47 @@ function ChunkManager:regenerateChunk(chunk)
                         local face = FACES[f]
                         if world:getBlock(x + face.dx, y + face.dy, z + face.dz) == 0 then
                             local shade = face.shade
-                            local sr, sg, sb = r * shade, g * shade, b * shade
+                            local fr, fg, fb = r * shade, g * shade, b * shade
+                            local ao = face.ao
+                            local m1, m2, m3, m4
 
                             for v = 1, 4 do
                                 local vp = face.verts[v]
+                                local sample = ao[v]
+                                local o1, o2, oc = sample[1], sample[2], sample[3]
+                                local s1 = world:getBlock(x+o1[1], y+o1[2], z+o1[3]) ~= 0
+                                local s2 = world:getBlock(x+o2[1], y+o2[2], z+o2[3]) ~= 0
+                                local sc = world:getBlock(x+oc[1], y+oc[2], z+oc[3]) ~= 0
+                                local m = AO_MUL[aoLevel(s1, s2, sc)]
+                                if     v == 1 then m1 = m
+                                elseif v == 2 then m2 = m
+                                elseif v == 3 then m3 = m
+                                else               m4 = m end
                                 vCount = vCount + 1
                                 verts[vCount] = {
                                     baseX + vp[1], baseY + vp[2], baseZ + vp[3],
-                                    sr, sg, sb, 1,
+                                    fr * m, fg * m, fb * m, 1,
                                 }
                             end
-                            idxs[iCount + 1] = vIndex + 1
-                            idxs[iCount + 2] = vIndex + 2
-                            idxs[iCount + 3] = vIndex + 3
-                            idxs[iCount + 4] = vIndex + 1
-                            idxs[iCount + 5] = vIndex + 3
-                            idxs[iCount + 6] = vIndex + 4
+
+                            -- Flip the quad's diagonal when AO is anisotropic
+                            -- so the darkened corner is shared by both tris,
+                            -- avoiding the classic AO interpolation seam.
+                            if m1 + m3 < m2 + m4 then
+                                idxs[iCount + 1] = vIndex + 2
+                                idxs[iCount + 2] = vIndex + 3
+                                idxs[iCount + 3] = vIndex + 4
+                                idxs[iCount + 4] = vIndex + 2
+                                idxs[iCount + 5] = vIndex + 4
+                                idxs[iCount + 6] = vIndex + 1
+                            else
+                                idxs[iCount + 1] = vIndex + 1
+                                idxs[iCount + 2] = vIndex + 2
+                                idxs[iCount + 3] = vIndex + 3
+                                idxs[iCount + 4] = vIndex + 1
+                                idxs[iCount + 5] = vIndex + 3
+                                idxs[iCount + 6] = vIndex + 4
+                            end
                             iCount = iCount + 6
                             vIndex = vIndex + 4
                         end
@@ -184,6 +270,17 @@ end
 -- mutations (e.g. importing a level) where per-cell markDirty would be wasteful.
 function ChunkManager:markAllDirty()
     for _, chunk in pairs(self.chunks) do chunk.dirty = true end
+end
+
+-- Move the sun. Re-bakes every chunk mesh (lighting lives in vertex colors),
+-- so this is a bulk op on the order of a castle regen, not a per-frame change.
+function ChunkManager:setSun(x, y, z)
+    local m = math.sqrt(x*x + y*y + z*z)
+    if m < 1e-6 then return end
+    SUN_DIR[1], SUN_DIR[2], SUN_DIR[3] = x/m, y/m, z/m
+    computeFaceShades()
+    self:markAllDirty()
+    self:flushDirty()
 end
 
 function ChunkManager:flushDirty()

@@ -267,7 +267,7 @@ function UI:draw()
         infoLines[#infoLines + 1] = "C random  |  [ / ] seed  |  V size  |  K keep"
     end
     local gridLabel = (self.grid and self.grid.modeName) and self.grid:modeName() or "off"
-    infoLines[#infoLines + 1] = string.format("G grid (%s)", gridLabel)
+    infoLines[#infoLines + 1] = string.format("G grid (%s)  |  J cycle sun", gridLabel)
     infoLines[#infoLines + 1] = "Drop .WAD to import DOOM  |  Drop .castler to load save"
     infoLines[#infoLines + 1] = "F5 quicksave  |  F9 quickload  |  Ctrl+Z undo  |  Ctrl+Shift+Z redo"
     infoLines[#infoLines + 1] = "Up/Down = adjust height during pending box/sphere/line"

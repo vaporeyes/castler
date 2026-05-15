@@ -47,6 +47,18 @@ local CASTLE_SIZES = {
 local CASTLE_KEEPS = {"square", "round"}
 local castleConfig = { seed = 1000, sizeIndex = 2, keepIndex = 1 }
 
+-- A day-arc of sun directions (point toward the sun). Cycled with J. Index 6
+-- is the renderer's startup default, so we begin there for visual continuity.
+local SUN_POSITIONS = {
+    {name = "Dawn",      dir = { 0.85, 0.28,  0.12}},
+    {name = "Morning",   dir = { 0.52, 0.70,  0.22}},
+    {name = "Noon",      dir = { 0.08, 0.98,  0.05}},
+    {name = "Afternoon", dir = {-0.50, 0.72, -0.25}},
+    {name = "Dusk",      dir = {-0.85, 0.26, -0.15}},
+    {name = "Default",   dir = { 0.40, 0.86,  0.30}},
+}
+local sunIndex = 6
+
 local function buildScene()
     -- Small reference castle near the world center so chunking is obvious.
     local cx = math.floor(WORLD_W / 2)
@@ -269,6 +281,13 @@ function love.keypressed(key)
         local rm = builder:toggleRemoveMode()
         showStatus(rm and "Subtract mode (all tools remove)"
                        or "Add mode (all tools place)", 2)
+        return
+    end
+    if key == "j" then
+        sunIndex = sunIndex % #SUN_POSITIONS + 1
+        local s = SUN_POSITIONS[sunIndex]
+        renderer:setSun(s.dir[1], s.dir[2], s.dir[3])
+        showStatus("Sun: " .. s.name, 2)
         return
     end
     if key == "f5" then
