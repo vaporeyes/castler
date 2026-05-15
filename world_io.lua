@@ -31,15 +31,29 @@ local function u32(n)
     )
 end
 
-local function readU8(data, pos)
+local function ensureBytes(data, pos, count, context)
+    if count == 0 then return true end
+    if pos < 1 or pos + count - 1 > #data then
+        return nil, string.format("%s extends past end of file", context)
+    end
+    return true
+end
+
+local function readU8(data, pos, context)
+    local ok, err = ensureBytes(data, pos, 1, context or "u8")
+    if not ok then return nil, pos, err end
     return data:byte(pos), pos + 1
 end
 
-local function readU16(data, pos)
+local function readU16(data, pos, context)
+    local ok, err = ensureBytes(data, pos, 2, context or "u16")
+    if not ok then return nil, pos, err end
     return bit.bor(data:byte(pos), bit.lshift(data:byte(pos + 1), 8)), pos + 2
 end
 
-local function readU32(data, pos)
+local function readU32(data, pos, context)
+    local ok, err = ensureBytes(data, pos, 4, context or "u32")
+    if not ok then return nil, pos, err end
     return bit.bor(
         bit.bor(data:byte(pos), bit.lshift(data:byte(pos + 1), 8)),
         bit.bor(bit.lshift(data:byte(pos + 2), 16), bit.lshift(data:byte(pos + 3), 24))
@@ -103,14 +117,18 @@ end
 function M.load(world, renderer, data)
     if not M.isSave(data) then return false, "not a Castler save" end
 
-    local version, p = readU16(data, 5)
+    local version, p, err = readU16(data, 5, "save version")
+    if not version then return false, err end
     if version ~= VERSION then
         return false, "unsupported save version " .. tostring(version)
     end
 
-    local w, p1 = readU16(data, p)
-    local h, p2 = readU16(data, p1)
-    local d, p3 = readU16(data, p2)
+    local w, p1; w, p1, err = readU16(data, p, "save width")
+    if not w then return false, err end
+    local h, p2; h, p2, err = readU16(data, p1, "save height")
+    if not h then return false, err end
+    local d, p3; d, p3, err = readU16(data, p2, "save depth")
+    if not d then return false, err end
 
     if w ~= world.width or h ~= world.height or d ~= world.depth then
         return false, string.format(
@@ -118,34 +136,58 @@ function M.load(world, renderer, data)
             w, h, d, world.width, world.height, world.depth)
     end
 
+    local loadedPalette = {}
+    local paletteCount, np; paletteCount, np, err = readU16(data, p3, "palette count")
+    if not paletteCount then return false, err end
+    p = np
+    for _ = 1, paletteCount do
+        local id; id, p, err = readU16(data, p, "palette id")
+        if not id then return false, err end
+        local r; r, p, err = readU8(data, p, "palette red")
+        if not r then return false, err end
+        local g; g, p, err = readU8(data, p, "palette green")
+        if not g then return false, err end
+        local b; b, p, err = readU8(data, p, "palette blue")
+        if not b then return false, err end
+        loadedPalette[id] = { r / 255, g / 255, b / 255 }
+    end
+
+    local loadedCells = {}
+    local writeIdx = 1
+    local runs; runs, p, err = readU32(data, p, "RLE run count")
+    if not runs then return false, err end
+    for _ = 1, runs do
+        local count; count, p, err = readU16(data, p, "RLE run length")
+        if not count then return false, err end
+        local id; id, p, err = readU16(data, p, "RLE block id")
+        if not id then return false, err end
+        if count == 0 then return false, "RLE run length cannot be zero" end
+        if writeIdx + count - 1 > world.size then
+            return false, "RLE data exceeds world size"
+        end
+        for _ = 1, count do
+            loadedCells[writeIdx] = id
+            writeIdx = writeIdx + 1
+        end
+    end
+    if writeIdx ~= world.size + 1 then
+        return false, "RLE data ended before filling world"
+    end
+    if p <= #data then
+        return false, "trailing bytes after RLE data"
+    end
+
     -- Wipe any sector-imported palette entries (ids above the user range);
     -- the file we're loading will re-supply whatever it had.
     for id in pairs(world.PALETTE) do
         if id > 5 then world.PALETTE[id] = nil end
     end
-
-    local paletteCount, np = readU16(data, p3)
-    p = np
-    for _ = 1, paletteCount do
-        local id; id, p = readU16(data, p)
-        local r; r, p = readU8(data, p)
-        local g; g, p = readU8(data, p)
-        local b; b, p = readU8(data, p)
-        world.PALETTE[id] = { r / 255, g / 255, b / 255 }
+    for id, col in pairs(loadedPalette) do
+        world.PALETTE[id] = col
     end
 
-    world:clear()
     local cells = world.data
-    local writeIdx = 1
-    local runs; runs, p = readU32(data, p)
-    for _ = 1, runs do
-        local count; count, p = readU16(data, p)
-        local id;    id,    p = readU16(data, p)
-        for _ = 1, count do
-            cells[writeIdx] = id
-            writeIdx = writeIdx + 1
-        end
-    end
+    for i = 1, world.size do cells[i] = loadedCells[i] end
 
     renderer:markAllDirty()
     renderer:flushDirty()

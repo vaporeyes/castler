@@ -14,6 +14,7 @@ local UI           = require("ui")
 local Wad          = require("wad_loader")
 local Voxelizer    = require("doom_voxelizer")
 local WorldIO      = require("world_io")
+local CastleGenerator = require("castle_generator")
 
 local QUICKSAVE_FILE = "quicksave.castler"
 
@@ -34,6 +35,7 @@ local undoManager
 local lastImportMsg = nil
 local lastImportMsgUntil = 0
 local playerStart = nil  -- set by DOOM import; pressing F jumps fly cam here
+local castleSeed = 1000
 
 local function buildScene()
     -- Small reference castle near the world center so chunking is obvious.
@@ -130,7 +132,7 @@ function love.update(dt)
 end
 
 function love.draw()
-    love.graphics.clear(0.10, 0.12, 0.18, 1, true, true)
+    love.graphics.clear(0.14, 0.16, 0.23, 1, true, true)
 
     local w, h = love.graphics.getDimensions()
     local view = activeCam:viewMatrix()
@@ -178,6 +180,15 @@ function love.keypressed(key)
     if key == "x" then builder:setTool("box");    return end
     if key == "o" then builder:setTool("sphere"); return end
     if key == "g" then grid:cycle();              return end
+    if key == "c" then
+        castleSeed = castleSeed + 1
+        local result = CastleGenerator.generate(world, renderer, { seed = castleSeed })
+        playerStart = nil
+        undoManager:clear()
+        builder:cancelPending()
+        showStatus(string.format("Generated castle seed %d", result.seed), 5)
+        return
+    end
     if key == "f" then
         setCameraMode(cameraMode == "fly" and "rts" or "fly")
         return
@@ -214,9 +225,19 @@ function love.keypressed(key)
     end
 end
 
-function love.mousepressed(x, y, b)   activeCam:mousepressed(x, y, b); builder:mousepressed(x, y, b) end
-function love.mousereleased(x, y, b)  activeCam:mousereleased(x, y, b) end
-function love.mousemoved(x, y, dx, dy) activeCam:mousemoved(x, y, dx, dy) end
+function love.mousepressed(x, y, b)
+    if ui and ui:mousepressed(x, y, b) then return end
+    activeCam:mousepressed(x, y, b)
+    builder:mousepressed(x, y, b)
+end
+function love.mousereleased(x, y, b)
+    if ui then ui:mousereleased(x, y, b) end
+    activeCam:mousereleased(x, y, b)
+end
+function love.mousemoved(x, y, dx, dy)
+    if ui and ui:mousemoved(x, y, dx, dy) then return end
+    activeCam:mousemoved(x, y, dx, dy)
+end
 function love.wheelmoved(x, y)        activeCam:wheelmoved(x, y)        end
 
 function love.filedropped(file)

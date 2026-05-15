@@ -197,9 +197,9 @@ end
 -- DOOM-style "diminished lighting" via linear fog from u_fogStart..u_fogEnd.
 -- Fog color matches the scene clear color so geometry dissolves into the
 -- background instead of revealing a hard horizon.
-ChunkManager.FOG_COLOR = {0.06, 0.07, 0.10}
-ChunkManager.FOG_START = 40
-ChunkManager.FOG_END   = 150
+ChunkManager.FOG_COLOR = {0.14, 0.16, 0.23}
+ChunkManager.FOG_START = 90
+ChunkManager.FOG_END   = 280
 
 function ChunkManager:draw(viewMatrix, projectionMatrix)
     love.graphics.setDepthMode("less", true)
