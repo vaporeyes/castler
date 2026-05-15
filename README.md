@@ -235,6 +235,7 @@ so the imported map reads the same way as the DOOM editor's wireframe view
 | Shift+Left-click | Remove (floor at y=1 is protected)              |
 | 1..5             | Pick block (Stone, Wood, Dirt, Grass, Sand)     |
 | B / L / R / X / O| Brush / Line / Rect / Box / Sphere              |
+| E                | Toggle Add / Subtract mode (all tools)          |
 | T                | Toggle building on/off (cursor + clicks)        |
 | C                | Generate procedural castle                      |
 | Up / Down arrows | Adjust pending op height offset                 |

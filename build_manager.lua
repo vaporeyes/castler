@@ -44,6 +44,10 @@ function BuildManager.new(world, renderer, camera, stability, particles, undo)
     -- When false: no ghost cursor and clicks don't place/remove. Lets the
     -- user explore (especially on foot) without accidental edits.
     self.buildEnabled = true
+    -- When true, every tool subtracts instead of adds (same brush/line/rect/
+    -- box/sphere flow). Shift still inverts, so it composes with the old
+    -- Shift+click-to-remove muscle memory.
+    self.removeMode = false
     -- Manual Y offset applied to the second-click end point. Lets the user
     -- build vertical extent for box/sphere/line ops when there's nothing
     -- above the floor to point at. Reset whenever an op completes/cancels.
@@ -81,6 +85,13 @@ end
 function BuildManager:toggleBuild()
     self:setBuildEnabled(not self.buildEnabled)
     return self.buildEnabled
+end
+
+function BuildManager:toggleRemoveMode()
+    self.removeMode = not self.removeMode
+    -- Cancel a pending two-click op so its sticky mode can't conflict.
+    self:cancelPending()
+    return self.removeMode
 end
 
 local function toolUsesHeightOffset(tool)
@@ -271,10 +282,13 @@ local function snapRectAxis(sx, sy, sz, ex, ey, ez, axis)
 end
 
 -- Cell currently under the cursor for the active mode (place vs remove).
+-- Effective mode = removeMode XOR Shift, so the persistent Subtract toggle
+-- and the hold-Shift-to-invert shortcut compose cleanly.
 function BuildManager:cursorCell()
     if not self.hit then return nil end
     local h = self.hit
-    if shiftHeld() then
+    local remove = (self.removeMode ~= shiftHeld())
+    if remove then
         return h.x, h.y, h.z, "remove", h.nx, h.ny, h.nz
     else
         return h.x + h.nx, h.y + h.ny, h.z + h.nz, "place", h.nx, h.ny, h.nz

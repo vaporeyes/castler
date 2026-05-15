@@ -225,6 +225,10 @@ function UI:draw()
         love.graphics.setColor(0.65, 0.70, 0.80, 1)
         love.graphics.printf("Building OFF  -  explore only  (T to enable)",
             0, statusY, sw, "center")
+    elseif self.builder.removeMode then
+        love.graphics.setColor(1, 0.45, 0.40, 1)
+        love.graphics.printf("SUBTRACT  -  " .. toolLabel .. pendingTag,
+            0, statusY, sw, "center")
     else
         love.graphics.setColor(1, 1, 1, 1)
         love.graphics.printf(name .. "  -  " .. toolLabel .. pendingTag,
@@ -253,7 +257,8 @@ function UI:draw()
         infoLines[#infoLines + 1] = "WASD pan  |  scroll zoom  |  RMB drag rotate  |  F walk (1st person)"
         infoLines[#infoLines + 1] = "LMB place  |  Shift+LMB remove  |  1-5 pick block"
     end
-    infoLines[#infoLines + 1] = "B brush  |  L line  |  R rect  |  X box  |  O sphere  |  T build on/off"
+    infoLines[#infoLines + 1] = "B brush  |  L line  |  R rect  |  X box  |  O sphere"
+    infoLines[#infoLines + 1] = "E add/subtract  |  T build on/off  |  Shift inverts add/subtract"
     infoLines[#infoLines + 1] = "Hold Ctrl/Cmd on 2nd click to axis-lock line/rect"
     if GetCastleInfo then
         local seed, sizeName, keepName = GetCastleInfo()

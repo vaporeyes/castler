@@ -265,6 +265,12 @@ function love.keypressed(key)
         showStatus("Building " .. (on and "ON" or "OFF - explore only"), 2)
         return
     end
+    if key == "e" then
+        local rm = builder:toggleRemoveMode()
+        showStatus(rm and "Subtract mode (all tools remove)"
+                       or "Add mode (all tools place)", 2)
+        return
+    end
     if key == "f5" then
         local ok, size = WorldIO.save(world, QUICKSAVE_FILE)
         if ok then
