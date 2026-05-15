@@ -35,7 +35,17 @@ local undoManager
 local lastImportMsg = nil
 local lastImportMsgUntil = 0
 local playerStart = nil  -- set by DOOM import; pressing F jumps fly cam here
-local castleSeed = 1000
+
+-- Castle generator config, browsable from the keyboard. Size presets feed
+-- explicit dimensions into the generator; the seed still drives the smaller
+-- per-castle variations, so (seed, size, keep) is fully deterministic.
+local CASTLE_SIZES = {
+    {name = "Small",  width = 26, depth = 24, wallHeight = 7,  towerHeight = 12, towerRadius = 3, wallThickness = 2},
+    {name = "Medium", width = 42, depth = 38, wallHeight = 9,  towerHeight = 15, towerRadius = 4, wallThickness = 3},
+    {name = "Large",  width = 64, depth = 56, wallHeight = 12, towerHeight = 20, towerRadius = 5, wallThickness = 3},
+}
+local CASTLE_KEEPS = {"square", "round"}
+local castleConfig = { seed = 1000, sizeIndex = 2, keepIndex = 1 }
 
 local function buildScene()
     -- Small reference castle near the world center so chunking is obvious.
@@ -82,7 +92,7 @@ function love.load()
         target   = {WORLD_W / 2, 0, WORLD_D / 2},
         distance = 60,
     })
-    flyCam    = FlyCamera.new({pos = {WORLD_W / 2, 16, WORLD_D / 2}})
+    flyCam    = FlyCamera.new({pos = {WORLD_W / 2, 16, WORLD_D / 2}, world = world})
     activeCam = camera
     stability   = Stability.new(world)
     particles   = Particles.new()
@@ -102,6 +112,11 @@ local function setCameraMode(mode)
         else
             flyCam:syncFromRTS(camera)
         end
+        -- First-person defaults to WALK (gravity + collision) - the primary
+        -- "explore the world on foot" case. Press N to switch to noclip when
+        -- you need free movement for building. setCollide() settles the
+        -- camera onto the ground at the just-set position.
+        flyCam:setCollide(true)
         flyCam:activate()
         activeCam = flyCam
     else
@@ -124,6 +139,35 @@ local function showStatus(msg, seconds)
 end
 
 function GetCameraMode() return cameraMode end
+
+-- Reports the live castle config for the HUD panel.
+function GetCastleInfo()
+    return castleConfig.seed,
+           CASTLE_SIZES[castleConfig.sizeIndex].name,
+           CASTLE_KEEPS[castleConfig.keepIndex]
+end
+
+-- Regenerate using the current (seed, size, keep) config and reset transient
+-- state, matching the behavior of WAD import and .castler load.
+local function regenerateCastle()
+    local size = CASTLE_SIZES[castleConfig.sizeIndex]
+    local keep = CASTLE_KEEPS[castleConfig.keepIndex]
+    local result = CastleGenerator.generate(world, renderer, {
+        seed          = castleConfig.seed,
+        width         = size.width,
+        depth         = size.depth,
+        wallHeight    = size.wallHeight,
+        towerHeight   = size.towerHeight,
+        towerRadius   = size.towerRadius,
+        wallThickness = size.wallThickness,
+        keepStyle     = keep,
+    })
+    playerStart = nil
+    undoManager:clear()
+    builder:cancelPending()
+    showStatus(string.format("Castle seed %d  -  %s  -  %s keep",
+        result.seed, size.name, keep), 4)
+end
 
 function love.update(dt)
     activeCam:update(dt)
@@ -181,16 +225,44 @@ function love.keypressed(key)
     if key == "o" then builder:setTool("sphere"); return end
     if key == "g" then grid:cycle();              return end
     if key == "c" then
-        castleSeed = castleSeed + 1
-        local result = CastleGenerator.generate(world, renderer, { seed = castleSeed })
-        playerStart = nil
-        undoManager:clear()
-        builder:cancelPending()
-        showStatus(string.format("Generated castle seed %d", result.seed), 5)
+        castleConfig.seed = love.math.random(1, 999999)
+        regenerateCastle()
+        return
+    end
+    if key == "[" then
+        castleConfig.seed = math.max(0, castleConfig.seed - 1)
+        regenerateCastle()
+        return
+    end
+    if key == "]" then
+        castleConfig.seed = castleConfig.seed + 1
+        regenerateCastle()
+        return
+    end
+    if key == "v" then
+        castleConfig.sizeIndex = castleConfig.sizeIndex % #CASTLE_SIZES + 1
+        regenerateCastle()
+        return
+    end
+    if key == "k" then
+        castleConfig.keepIndex = castleConfig.keepIndex % #CASTLE_KEEPS + 1
+        regenerateCastle()
         return
     end
     if key == "f" then
         setCameraMode(cameraMode == "fly" and "rts" or "fly")
+        return
+    end
+    if key == "n" then
+        -- Toggle walk (gravity + collision) vs noclip free-fly. Only meaningful
+        -- in first-person; harmless otherwise.
+        flyCam:setCollide(not flyCam.collide)
+        showStatus("First-person: " .. flyCam:modeName(), 2)
+        return
+    end
+    if key == "t" then
+        local on = builder:toggleBuild()
+        showStatus("Building " .. (on and "ON" or "OFF - explore only"), 2)
         return
     end
     if key == "f5" then

@@ -41,6 +41,9 @@ function BuildManager.new(world, renderer, camera, stability, particles, undo)
     self.hit = nil          -- {x, y, z, nx, ny, nz}
     self.tool = TOOL_BRUSH
     self.pending = nil      -- {x, y, z, axis, mode}
+    -- When false: no ghost cursor and clicks don't place/remove. Lets the
+    -- user explore (especially on foot) without accidental edits.
+    self.buildEnabled = true
     -- Manual Y offset applied to the second-click end point. Lets the user
     -- build vertical extent for box/sphere/line ops when there's nothing
     -- above the floor to point at. Reset whenever an op completes/cancels.
@@ -68,6 +71,16 @@ function BuildManager:cancelPending()
         return true
     end
     return false
+end
+
+function BuildManager:setBuildEnabled(on)
+    self.buildEnabled = on and true or false
+    if not self.buildEnabled then self:cancelPending() end
+end
+
+function BuildManager:toggleBuild()
+    self:setBuildEnabled(not self.buildEnabled)
+    return self.buildEnabled
 end
 
 local function toolUsesHeightOffset(tool)
@@ -473,6 +486,7 @@ local function drawGhostCube(mvp, sw, sh, cellX, cellY, cellZ, colorR, colorG, c
 end
 
 function BuildManager:draw()
+    if not self.buildEnabled then return end
     if not self.hit and not self.pending then return end
 
     local sw, sh = love.graphics.getDimensions()
@@ -547,6 +561,7 @@ function BuildManager:draw()
 end
 
 function BuildManager:mousepressed(_, _, button)
+    if not self.buildEnabled then return end
     if button ~= 1 or not self.hit then return end
     local x, y, z, mode, nx, ny, nz = self:cursorCell()
     if not x then return end

@@ -58,14 +58,15 @@ Two cameras share a common interface. Press **F** to toggle.
 - **RTS** (default): spherical orbit around a target. WASD pans, scroll zooms,
   right-click drag rotates. All four animated values (target, yaw, pitch, distance)
   are exponentially smoothed for frame-rate-independent feel.
-- **Fly** (first-person): mouse-look, WASD strafe along the look direction
-  (A/D held horizontal so leveling stays intuitive), Space/Ctrl for up/down,
-  LShift for 2.8x boost. Uses `setRelativeMode(true)` so the cursor is hidden and
-  mouse deltas drive yaw/pitch.
+- **First-person**: mouse-look (cursor hidden via `setRelativeMode(true)`).
+  Defaults to **walk**: gravity, AABB-vs-voxel collision with wall sliding,
+  auto step-up over 1-voxel ledges, Space to jump, LShift to run. Press **N**
+  to toggle **noclip** free-fly (WASD along the look direction, Space/Ctrl for
+  up/down, LShift boost) for building and overview.
 
-When toggling into Fly, the camera syncs from the RTS view so you continue from
-where you were looking. If a DOOM level was imported with a Player 1 start, Fly
-teleports there with the correct facing instead.
+When toggling into first-person the camera syncs from the RTS view and settles
+onto the ground beneath it. If a DOOM level was imported with a Player 1 start,
+it spawns there with the correct facing instead.
 
 ### Build tools
 
@@ -94,14 +95,28 @@ the preview switches to "shell only" cells so the line-draw count stays cheap.
 
 ### Procedural castle generator
 
-Press **C** to replace the current world with a seeded procedural castle. The
+Press **C** to replace the current world with a procedural castle. The
 generator builds a complete walled compound with:
 
 - four round corner towers
 - a front gatehouse with twin towers and a pass-through
 - perimeter walls with crenellations
-- a central keep with battlements
+- a central keep (square hall or round donjon) with battlements
 - courtyard paths stamped into the floor
+
+The generator is browsable from the keyboard, with the current config shown in
+the HUD panel:
+
+| Key   | Action                                                |
+| ----- | ----------------------------------------------------- |
+| C     | Regenerate with a fresh random seed                   |
+| [ / ] | Step the seed down / up (deterministic browsing)      |
+| V     | Cycle size: Small / Medium / Large                    |
+| K     | Cycle keep style: square hall / round donjon          |
+
+`(seed, size, keep)` is fully deterministic: the size preset feeds explicit
+dimensions while the seed drives the smaller per-castle variations, so the same
+config always rebuilds the same castle.
 
 `castle_generator.lua` owns the castle layout rules. `voxel_ops.lua` provides
 the reusable stamping primitives, including boxes, hollow boxes, cylinders,
@@ -220,26 +235,31 @@ so the imported map reads the same way as the DOOM editor's wireframe view
 | Shift+Left-click | Remove (floor at y=1 is protected)              |
 | 1..5             | Pick block (Stone, Wood, Dirt, Grass, Sand)     |
 | B / L / R / X / O| Brush / Line / Rect / Box / Sphere              |
+| T                | Toggle building on/off (cursor + clicks)        |
 | C                | Generate procedural castle                      |
 | Up / Down arrows | Adjust pending op height offset                 |
 | Ctrl / Cmd       | Axis-lock during pending Line/Rect second click |
 | G                | Grid: off / overlay / occluded                  |
-| F                | Switch to Fly mode                              |
+| F                | Enter first-person (walk)                       |
 | F5 / F9          | Quicksave / quickload                           |
 | Ctrl+Z / Y / Shift+Z | Undo / redo                                 |
 | Esc              | Cancel pending op (first press) / quit (second) |
 
-### Fly mode
+### First-person mode
 
-| Input          | Action                                          |
-| -------------- | ----------------------------------------------- |
-| Mouse motion   | Look (yaw/pitch, pitch clamped to +-89 degrees) |
-| WASD           | Strafe (W/S along look, A/D horizontal)         |
-| Space / Ctrl   | Up / Down (world +Y / -Y)                       |
-| LShift         | 2.8x speed boost                                |
-| Left-click     | Place / commit (raycast from screen center)     |
-| Shift+Left-click | Remove                                        |
-| F              | Return to RTS                                   |
+Defaults to **walk**. Press **N** to toggle noclip.
+
+| Input            | Walk                          | Noclip                        |
+| ---------------- | ----------------------------- | ----------------------------- |
+| Mouse motion     | Look (pitch clamped +-89)     | Look (pitch clamped +-89)     |
+| WASD             | Move (horizontal)             | Fly along look direction      |
+| Space            | Jump                          | Up (world +Y)                 |
+| Ctrl             | -                             | Down (world -Y)               |
+| LShift           | Run (1.9x)                    | Boost (2.8x)                  |
+| Left-click       | Place / commit (screen-center ray) | same                     |
+| Shift+Left-click | Remove                        | Remove                        |
+| N                | Switch to noclip              | Switch to walk                |
+| F                | Return to RTS                 | Return to RTS                 |
 
 ---
 

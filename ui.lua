@@ -221,8 +221,15 @@ function UI:draw()
         end
     end
     local statusY = y - 22
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.printf(name .. "  -  " .. toolLabel .. pendingTag, 0, statusY, sw, "center")
+    if self.builder.buildEnabled == false then
+        love.graphics.setColor(0.65, 0.70, 0.80, 1)
+        love.graphics.printf("Building OFF  -  explore only  (T to enable)",
+            0, statusY, sw, "center")
+    else
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.printf(name .. "  -  " .. toolLabel .. pendingTag,
+            0, statusY, sw, "center")
+    end
 
     local infoLines = {
         string.format("FPS %d", love.timer.getFPS()),
@@ -233,14 +240,27 @@ function UI:draw()
     end
     local mode = GetCameraMode and GetCameraMode() or "rts"
     if mode == "fly" then
-        infoLines[#infoLines + 1] = "FLY MODE - mouse looks  |  WASD strafe  |  Space/Ctrl up-down"
-        infoLines[#infoLines + 1] = "Shift = boost  |  F again returns to RTS"
+        local cam = self.builder and self.builder.camera
+        local fpMode = (cam and cam.modeName) and cam:modeName() or "noclip"
+        if fpMode == "walk" then
+            infoLines[#infoLines + 1] = "WALK - mouse looks  |  WASD move  |  Space jump  |  Shift run"
+            infoLines[#infoLines + 1] = "N = noclip  |  F returns to RTS"
+        else
+            infoLines[#infoLines + 1] = "NOCLIP - mouse looks  |  WASD fly  |  Space/Ctrl up-down"
+            infoLines[#infoLines + 1] = "Shift = boost  |  N = walk  |  F returns to RTS"
+        end
     else
-        infoLines[#infoLines + 1] = "WASD pan  |  scroll zoom  |  RMB drag rotate  |  F fly mode"
+        infoLines[#infoLines + 1] = "WASD pan  |  scroll zoom  |  RMB drag rotate  |  F walk (1st person)"
         infoLines[#infoLines + 1] = "LMB place  |  Shift+LMB remove  |  1-5 pick block"
     end
-    infoLines[#infoLines + 1] = "B brush  |  L line  |  R rect  |  X box  |  O sphere  |  C castle"
+    infoLines[#infoLines + 1] = "B brush  |  L line  |  R rect  |  X box  |  O sphere  |  T build on/off"
     infoLines[#infoLines + 1] = "Hold Ctrl/Cmd on 2nd click to axis-lock line/rect"
+    if GetCastleInfo then
+        local seed, sizeName, keepName = GetCastleInfo()
+        infoLines[#infoLines + 1] = string.format(
+            "Castle: seed %d  |  %s  |  %s keep", seed, sizeName, keepName)
+        infoLines[#infoLines + 1] = "C random  |  [ / ] seed  |  V size  |  K keep"
+    end
     local gridLabel = (self.grid and self.grid.modeName) and self.grid:modeName() or "off"
     infoLines[#infoLines + 1] = string.format("G grid (%s)", gridLabel)
     infoLines[#infoLines + 1] = "Drop .WAD to import DOOM  |  Drop .castler to load save"

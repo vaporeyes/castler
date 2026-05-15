@@ -87,6 +87,31 @@ local function addKeep(world, cx, cz, width, depth, height)
     Ops.crenellateZ(world, right, height + 1, front, back, STONE)
 end
 
+-- Round donjon variant: a hollow cylinder with a doorway and a battlemented
+-- rim. Used when keepStyle == "round".
+local function addRoundKeep(world, cx, cz, radius, height)
+    Ops.cylinder(world, cx, cz, radius, 2, height, STONE, false)
+    Ops.cylinder(world, cx, cz, math.max(1, radius - 2), 3, height - 1, 0, false)
+    Ops.cylinder(world, cx, cz, radius, height + 1, height + 1, STONE, true)
+
+    -- Doorway on the front (toward -Z).
+    Ops.clearBox(world, cx - 1, 2, cz - radius, cx + 1, 5, cz - radius)
+
+    -- Alternating merlons around the rim.
+    local r2 = radius * radius
+    local inner = math.max(0, radius - 1.5)
+    local inner2 = inner * inner
+    for dz = -radius, radius do
+        for dx = -radius, radius do
+            local d2 = dx * dx + dz * dz
+            if d2 <= r2 and d2 >= inner2 and ((cx + dx) + (cz + dz)) % 2 == 0 then
+                Ops.fillBox(world, cx + dx, height + 2, cz + dz,
+                                   cx + dx, height + 3, cz + dz, STONE)
+            end
+        end
+    end
+end
+
 local function addCourtyard(world, gateX, front, cx, cz, left, right, back)
     Ops.fillBox(world, gateX - 2, 1, front + 1, gateX + 2, 1, cz, SAND)
     Ops.fillBox(world, cx - 2, 1, cz - 2, cx + 2, 1, cz + 2, SAND)
@@ -125,8 +150,16 @@ function CastleGenerator.generate(world, renderer, opts)
     addTower(world, left, back, towerRadius, wallHeight, towerHeight)
     addTower(world, right, back, towerRadius, wallHeight, towerHeight)
     addGatehouse(world, gateX, front, wallHeight, towerRadius)
-    addKeep(world, cx, cz + choice(math.random, 2, 5), choice(math.random, 12, 16),
-        choice(math.random, 10, 14), wallHeight + choice(math.random, 4, 7))
+
+    local keepCenterZ = cz + choice(math.random, 2, 5)
+    local keepHeight = wallHeight + choice(math.random, 4, 7)
+    if opts.keepStyle == "round" then
+        addRoundKeep(world, cx, keepCenterZ, choice(math.random, 6, 9), keepHeight + 2)
+    else
+        addKeep(world, cx, keepCenterZ, choice(math.random, 12, 16),
+            choice(math.random, 10, 14), keepHeight)
+    end
+
     addCourtyard(world, gateX, front, cx, cz, left, right, back)
 
     if renderer then
