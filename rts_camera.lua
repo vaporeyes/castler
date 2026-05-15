@@ -115,12 +115,18 @@ function RTSCamera:update(dt)
     self.cDistance  = lerp(self.cDistance, self.distance, t)
 end
 
+local function altHeld()
+    return love.keyboard.isDown("lalt") or love.keyboard.isDown("ralt")
+end
+
+-- Orbit is now Alt + left-drag (RMB is reserved for block removal). Holding
+-- Alt when pressing LMB starts an orbit; releasing LMB ends it.
 function RTSCamera:mousepressed(x, y, button)
-    if button == 2 then self.rotating = true end
+    if button == 1 and altHeld() then self.rotating = true end
 end
 
 function RTSCamera:mousereleased(x, y, button)
-    if button == 2 then self.rotating = false end
+    if button == 1 then self.rotating = false end
 end
 
 function RTSCamera:mousemoved(x, y, dx, dy)

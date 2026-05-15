@@ -324,6 +324,16 @@ end
 
 function love.mousepressed(x, y, b)
     if ui and ui:mousepressed(x, y, b) then return end
+    if b == 3 then  -- middle click = eyedropper
+        local picked = builder:eyedrop()
+        if picked then showStatus("Picked block " .. tostring(picked), 2) end
+        return
+    end
+    if b == 2 then  -- right click = remove the targeted block
+        builder:removeAtCursor()
+        return
+    end
+    -- Left click: camera self-gates orbit on Alt; builder skips Alt+LMB.
     activeCam:mousepressed(x, y, b)
     builder:mousepressed(x, y, b)
 end

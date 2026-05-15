@@ -94,6 +94,15 @@ function BuildManager:toggleRemoveMode()
     return self.removeMode
 end
 
+-- Pick the block under the cursor into the active slot. Read-only, so it
+-- works even when building is disabled. Returns the picked id or nil.
+function BuildManager:eyedrop()
+    local h = self.hit
+    if not h or not h.id or h.id == 0 then return nil end
+    self.activeBlockId = h.id
+    return h.id
+end
+
 local function toolUsesHeightOffset(tool)
     return tool == TOOL_BOX or tool == TOOL_SPHERE or tool == TOOL_LINE
 end
@@ -247,6 +256,11 @@ end
 
 local function shiftHeld()
     return love.keyboard.isDown("lshift") or love.keyboard.isDown("rshift")
+end
+
+local function altHeld()
+    -- Alt/Option reserves LMB for RTS camera orbit, so builds must skip it.
+    return love.keyboard.isDown("lalt") or love.keyboard.isDown("ralt")
 end
 
 local function axisLockHeld()
@@ -574,9 +588,21 @@ function BuildManager:draw()
     love.graphics.pop()
 end
 
+-- Right-click: break the single solid block under the cursor. Routes through
+-- applyCells so undo, stability cascade, and particles all fire. Independent
+-- of the active tool / add-subtract mode (Minecraft-style quick break).
+function BuildManager:removeAtCursor()
+    if not self.buildEnabled then return end
+    local h = self.hit
+    if not h then return end
+    self:applyCells({ h.x, h.y, h.z }, "remove")
+end
+
 function BuildManager:mousepressed(_, _, button)
     if not self.buildEnabled then return end
     if button ~= 1 or not self.hit then return end
+    -- Alt+LMB is the RTS camera orbit gesture; never build on it.
+    if altHeld() then return end
     local x, y, z, mode, nx, ny, nz = self:cursorCell()
     if not x then return end
 

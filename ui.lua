@@ -242,20 +242,34 @@ function UI:draw()
         local v, t, drawn, total = self.renderer:getStats()
         infoLines[#infoLines + 1] = string.format("Chunks %d/%d   Tris %d", drawn, total, t)
     end
+
+    -- Hover readout: what the build ray is currently pointing at.
+    local h = self.builder and self.builder.hit
+    if h then
+        local nm = BLOCK_NAMES[h.id] or ("#" .. tostring(h.id))
+        local line = string.format("Aim (%d,%d,%d)  %s [%d]", h.x, h.y, h.z, nm, h.id)
+        if self.renderer and self.renderer.chunkCoordsOf then
+            local ccx, ccy, ccz = self.renderer:chunkCoordsOf(h.x, h.y, h.z)
+            line = line .. string.format("  chunk (%d,%d,%d)", ccx, ccy, ccz)
+        end
+        infoLines[#infoLines + 1] = line
+    else
+        infoLines[#infoLines + 1] = "Aim (sky)"
+    end
     local mode = GetCameraMode and GetCameraMode() or "rts"
     if mode == "fly" then
         local cam = self.builder and self.builder.camera
         local fpMode = (cam and cam.modeName) and cam:modeName() or "noclip"
         if fpMode == "walk" then
             infoLines[#infoLines + 1] = "WALK - mouse looks  |  WASD move  |  Space jump  |  Shift run"
-            infoLines[#infoLines + 1] = "N = noclip  |  F returns to RTS"
+            infoLines[#infoLines + 1] = "LMB place  |  RMB remove  |  N noclip  |  F returns to RTS"
         else
             infoLines[#infoLines + 1] = "NOCLIP - mouse looks  |  WASD fly  |  Space/Ctrl up-down"
-            infoLines[#infoLines + 1] = "Shift = boost  |  N = walk  |  F returns to RTS"
+            infoLines[#infoLines + 1] = "LMB place  |  RMB remove  |  N walk  |  F returns to RTS"
         end
     else
-        infoLines[#infoLines + 1] = "WASD pan  |  scroll zoom  |  RMB drag rotate  |  F walk (1st person)"
-        infoLines[#infoLines + 1] = "LMB place  |  Shift+LMB remove  |  1-5 pick block"
+        infoLines[#infoLines + 1] = "WASD pan  |  scroll zoom  |  Alt+drag rotate  |  F walk (1st person)"
+        infoLines[#infoLines + 1] = "LMB place  |  RMB remove  |  Mid-click pick  |  1-5 block"
     end
     infoLines[#infoLines + 1] = "B brush  |  L line  |  R rect  |  X box  |  O sphere"
     infoLines[#infoLines + 1] = "E add/subtract  |  T build on/off  |  Shift inverts add/subtract"
@@ -272,6 +286,20 @@ function UI:draw()
     infoLines[#infoLines + 1] = "F5 quicksave  |  F9 quickload  |  Ctrl+Z undo  |  Ctrl+Shift+Z redo"
     infoLines[#infoLines + 1] = "Up/Down = adjust height during pending box/sphere/line"
     drawInfoPanel(self, infoLines)
+
+    -- First-person crosshair: the build/eyedrop ray fires from screen center,
+    -- so show where that is.
+    if mode == "fly" then
+        local cx, cy = sw * 0.5, sh * 0.5
+        love.graphics.setColor(1, 1, 1, 0.55)
+        love.graphics.setLineWidth(1)
+        love.graphics.line(cx - 7, cy, cx - 2, cy)
+        love.graphics.line(cx + 2, cy, cx + 7, cy)
+        love.graphics.line(cx, cy - 7, cx, cy - 2)
+        love.graphics.line(cx, cy + 2, cx, cy + 7)
+        love.graphics.setColor(1, 1, 1, 0.85)
+        love.graphics.circle("fill", cx, cy, 1.2)
+    end
 
     -- Transient import banner.
     if GetImportStatus then

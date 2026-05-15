@@ -234,9 +234,11 @@ so the imported map reads the same way as the DOOM editor's wireframe view
 | ---------------- | ----------------------------------------------- |
 | WASD             | Pan target along ground plane                   |
 | Scroll wheel     | Zoom (distance from target, 6..400)             |
-| Right-click drag | Orbit (yaw free, pitch 10..85 degrees)          |
+| Alt + left-drag  | Orbit (yaw free, pitch 10..85 degrees)          |
 | Left-click       | Place / commit pending op                       |
-| Shift+Left-click | Remove (floor at y=1 is protected)              |
+| Right-click      | Remove the targeted block (floor y=1 protected) |
+| Shift+Left-click | Remove (tool-shaped; floor y=1 protected)       |
+| Middle-click     | Eyedropper - pick block under cursor            |
 | 1..5             | Pick block (Stone, Wood, Dirt, Grass, Sand)     |
 | B / L / R / X / O| Brush / Line / Rect / Box / Sphere              |
 | E                | Toggle Add / Subtract mode (all tools)          |
@@ -263,7 +265,8 @@ Defaults to **walk**. Press **N** to toggle noclip.
 | Ctrl             | -                             | Down (world -Y)               |
 | LShift           | Run (1.9x)                    | Boost (2.8x)                  |
 | Left-click       | Place / commit (screen-center ray) | same                     |
-| Shift+Left-click | Remove                        | Remove                        |
+| Right-click      | Remove targeted block         | Remove targeted block         |
+| Middle-click     | Eyedropper                    | Eyedropper                    |
 | N                | Switch to noclip              | Switch to walk                |
 | F                | Return to RTS                 | Return to RTS                 |
 
