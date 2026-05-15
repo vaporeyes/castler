@@ -4,6 +4,8 @@ A voxel castle builder in Love2D with structural physics, an RTS-style editor ca
 a free-fly first-person camera, and a built-in DOOM (`.WAD`) level importer that
 voxelizes vanilla DOOM and DOOM II maps into the same world you build in.
 
+![Procedural castle generated in Castler](media/castler.png)
+
 The project follows the four-phase plan in [`spec.md`](spec.md) (data and rendering,
 input and camera, structural integrity, UI) and the implementation outline in
 [`prompt_plan.md`](prompt_plan.md), with additional quality-of-life features bolted on.
@@ -89,6 +91,23 @@ Modifiers:
 
 Pending operation previews use a wireframe ghost. For large ops (over 500 cells)
 the preview switches to "shell only" cells so the line-draw count stays cheap.
+
+### Procedural castle generator
+
+Press **C** to replace the current world with a seeded procedural castle. The
+generator builds a complete walled compound with:
+
+- four round corner towers
+- a front gatehouse with twin towers and a pass-through
+- perimeter walls with crenellations
+- a central keep with battlements
+- courtyard paths stamped into the floor
+
+`castle_generator.lua` owns the castle layout rules. `voxel_ops.lua` provides
+the reusable stamping primitives, including boxes, hollow boxes, cylinders,
+walls, floors, and crenellations. Generation marks all chunks dirty once and
+flushes the renderer in one bulk pass. Undo history is cleared after generation,
+matching the behavior of WAD imports and `.castler` loads.
 
 ### Structural integrity
 
@@ -201,6 +220,7 @@ so the imported map reads the same way as the DOOM editor's wireframe view
 | Shift+Left-click | Remove (floor at y=1 is protected)              |
 | 1..5             | Pick block (Stone, Wood, Dirt, Grass, Sand)     |
 | B / L / R / X / O| Brush / Line / Rect / Box / Sphere              |
+| C                | Generate procedural castle                      |
 | Up / Down arrows | Adjust pending op height offset                 |
 | Ctrl / Cmd       | Axis-lock during pending Line/Rect second click |
 | G                | Grid: off / overlay / occluded                  |
@@ -281,6 +301,14 @@ doom_voxelizer.lua    Converts a parsed level into voxel placements. Computes
                      scale + offset, builds per-sector lit palette entries,
                      scanline-fills sector polygons, stamps single-sided and
                      two-sided step walls, places Player 1 start.
+
+voxel_ops.lua         Reusable voxel stamping primitives for generated
+                     structures: filled and hollow boxes, cylinders, walls,
+                     floors, and crenellations.
+
+castle_generator.lua  Seeded procedural castle generator. Composes voxel_ops
+                     primitives into walls, towers, a gatehouse, a central
+                     keep, battlements, and courtyard paths.
 
 ui.lua                2D HUD overlay - hotbar, status line, control hints,
                      transient import banner. Drawn with depth disabled.
