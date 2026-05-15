@@ -299,4 +299,22 @@ function Wad.loadLevel(data, levelName)
     return level, foundName
 end
 
+-- Ordered list of every level marker name in the WAD (e.g. {"MAP01","MAP02"}
+-- or {"E1M1","E1M2",...}). Returns the array, or nil + err.
+function Wad.listLevels(data)
+    local header, err = readHeader(data)
+    if not header then return nil, err end
+    local dir; dir, err = readDirectory(data, header)
+    if not dir then return nil, err end
+
+    local levels = {}
+    for _, lump in ipairs(dir) do
+        if lump.name:match("^E%dM%d$") or lump.name:match("^MAP%d%d$") then
+            levels[#levels + 1] = lump.name
+        end
+    end
+    if #levels == 0 then return nil, "no DOOM level markers found in WAD" end
+    return levels
+end
+
 return Wad

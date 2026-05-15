@@ -574,6 +574,14 @@ function BuildManager:draw()
 
     love.graphics.push("all")
     love.graphics.setDepthMode()
+
+    -- Outline the exact solid block under the ray (what right-click breaks),
+    -- in a neutral color distinct from the colored placement ghost.
+    if self.hit then
+        love.graphics.setLineWidth(1.5)
+        drawGhostCube(mvp, sw, sh, self.hit.x, self.hit.y, self.hit.z, 0.92, 0.94, 1.0)
+    end
+
     love.graphics.setLineWidth(2)
     for i = 1, #previewCells, 3 do
         drawGhostCube(mvp, sw, sh, previewCells[i], previewCells[i+1], previewCells[i+2], colorR, colorG, colorB)

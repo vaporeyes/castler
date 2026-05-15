@@ -96,6 +96,16 @@ Modifiers:
 
 Pending operation previews use a wireframe ghost. For large ops (over 500 cells)
 the preview switches to "shell only" cells so the line-draw count stays cheap.
+A neutral wireframe also outlines the exact solid block under the ray (what
+right-click removes), distinct from the colored placement ghost.
+
+### Minimap
+
+Press **M** to toggle a top-down minimap (bottom-right). Each column is
+colored by its topmost solid block, shaded lighter with height for relief.
+Baked into an ImageData on a ~0.45s timer (cheap and self-correcting after
+edits, castle regen, imports, or undo - no explicit invalidation hooks). A
+yellow dot + line marks the camera's focus position and horizontal facing.
 
 ### Procedural castle generator
 
@@ -185,7 +195,10 @@ Save file locations:
 
 Drag a vanilla DOOM `.WAD` (`DOOM.WAD`, `DOOM2.WAD`, etc.) onto the window.
 The first level marker found (`E1M1`, `MAP01`, ...) is voxelized and replaces
-the current world.
+the current world. The WAD bytes are retained so you can browse every level in
+it with **,** (previous) and **.** (next) - no need to re-drop the file. The
+HUD shows the current level name and index. Selection is cleared when a castle
+is generated or a `.castler` save is loaded.
 
 What is parsed:
 
@@ -248,6 +261,8 @@ so the imported map reads the same way as the DOOM editor's wireframe view
 | Ctrl / Cmd       | Axis-lock during pending Line/Rect second click |
 | G                | Grid: off / overlay / occluded                  |
 | J                | Cycle sun position (re-bakes lighting)          |
+| M                | Toggle minimap                                  |
+| , / .            | Previous / next level in the dropped WAD        |
 | F                | Enter first-person (walk)                       |
 | F5 / F9          | Quicksave / quickload                           |
 | Ctrl+Z / Y / Shift+Z | Undo / redo                                 |
@@ -341,6 +356,9 @@ castle_generator.lua  Seeded procedural castle generator. Composes voxel_ops
 
 ui.lua                2D HUD overlay - hotbar, status line, control hints,
                      transient import banner. Drawn with depth disabled.
+
+minimap.lua           Top-down minimap. Bakes topmost-solid-per-column into an
+                     ImageData on a throttled timer; overlays a camera marker.
 
 main.lua              See above. Imports the rest, wires Love2D callbacks.
 

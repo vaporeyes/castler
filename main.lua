@@ -11,6 +11,7 @@ local UndoManager  = require("undo_manager")
 local BuildManager = require("build_manager")
 local Grid         = require("grid")
 local UI           = require("ui")
+local Minimap      = require("minimap")
 local Wad          = require("wad_loader")
 local Voxelizer    = require("doom_voxelizer")
 local WorldIO      = require("world_io")
@@ -31,10 +32,16 @@ local particles
 local builder
 local grid
 local ui
+local minimap
 local undoManager
 local lastImportMsg = nil
 local lastImportMsgUntil = 0
 local playerStart = nil  -- set by DOOM import; pressing F jumps fly cam here
+
+-- Dropped-WAD state so levels can be browsed without re-dropping the file.
+local wadData = nil      -- raw WAD bytes
+local wadLevels = nil    -- ordered array of level marker names
+local wadIndex = 1       -- currently voxelized level (1-based)
 
 -- Castle generator config, browsable from the keyboard. Size presets feed
 -- explicit dimensions into the generator; the seed still drives the smaller
@@ -112,6 +119,7 @@ function love.load()
     builder     = BuildManager.new(world, renderer, camera, stability, particles, undoManager)
     grid        = Grid.new(world, camera, renderer.chunkSize)
     ui          = UI.new(world, builder, renderer, grid)
+    minimap     = Minimap.new(world)
 end
 
 local function setCameraMode(mode)
@@ -159,6 +167,61 @@ function GetCastleInfo()
            CASTLE_KEEPS[castleConfig.keepIndex]
 end
 
+local function clearWadSelection()
+    wadData, wadLevels, wadIndex = nil, nil, 1
+end
+
+-- Voxelize wadLevels[idx] from the retained WAD bytes. Shared by the initial
+-- drop and the prev/next browse keys. Defined before regenerateCastle and the
+-- input callbacks so those resolve it as this local, not a nil global.
+local function loadWadLevel(idx)
+    if not wadData or not wadLevels then return end
+    local name = wadLevels[idx]
+    local level, err = Wad.loadLevel(wadData, name)
+    if not level then
+        showStatus("Load " .. tostring(name) .. " failed: " .. tostring(err))
+        return
+    end
+
+    local ok, result, importedStart = pcall(Voxelizer.import, world, renderer, level)
+    if not ok then
+        showStatus("Voxelize failed: " .. tostring(result))
+        return
+    end
+
+    wadIndex = idx
+    camera.targetPos = {world.width / 2, 0, world.depth / 2}
+    camera.distance = math.max(world.width, world.depth) * 0.7
+    playerStart = importedStart
+    undoManager:clear()
+    builder:cancelPending()
+    if playerStart then
+        flyCam.pos = {playerStart.x, playerStart.y, playerStart.z}
+        flyCam.yaw = playerStart.yaw
+        flyCam.pitch = 0
+    else
+        flyCam.pos = {world.width / 2, math.max(8, world.height * 0.3), world.depth / 2}
+    end
+
+    showStatus(string.format("%s  (%d/%d)  %d sectors  -  , / . to browse",
+        level.name, idx, #wadLevels, #level.sectors), 8)
+end
+
+-- Step the WAD level selection (wraps). No-op if no WAD is loaded.
+local function stepWadLevel(delta)
+    if not wadLevels or #wadLevels == 0 then return false end
+    local idx = (wadIndex - 1 + delta) % #wadLevels + 1
+    loadWadLevel(idx)
+    return true
+end
+
+function GetWadInfo()
+    if wadLevels and wadLevels[wadIndex] then
+        return wadLevels[wadIndex], wadIndex, #wadLevels
+    end
+    return nil
+end
+
 -- Regenerate using the current (seed, size, keep) config and reset transient
 -- state, matching the behavior of WAD import and .castler load.
 local function regenerateCastle()
@@ -175,6 +238,7 @@ local function regenerateCastle()
         keepStyle     = keep,
     })
     playerStart = nil
+    clearWadSelection()
     undoManager:clear()
     builder:cancelPending()
     showStatus(string.format("Castle seed %d  -  %s  -  %s keep",
@@ -185,6 +249,18 @@ function love.update(dt)
     activeCam:update(dt)
     builder:update(dt)
     particles:update(dt)
+    minimap:update(dt)
+end
+
+-- Where the minimap marker sits + which way it faces, in world XZ.
+local function minimapMarker()
+    if cameraMode == "fly" then
+        local fx, _, fz = flyCam:forward()
+        return flyCam.pos[1], flyCam.pos[3], fx, fz
+    end
+    local t = camera.cTarget
+    local e = camera:eye()
+    return t[1], t[3], t[1] - e[1], t[3] - e[3]
 end
 
 function love.draw()
@@ -199,6 +275,8 @@ function love.draw()
     particles:draw(view, proj)
     builder:draw()
     ui:draw()
+    local mmx, mmz, mmdx, mmdz = minimapMarker()
+    minimap:draw(mmx, mmz, mmdx, mmdz)
 end
 
 local function modHeld()
@@ -236,6 +314,19 @@ function love.keypressed(key)
     if key == "x" then builder:setTool("box");    return end
     if key == "o" then builder:setTool("sphere"); return end
     if key == "g" then grid:cycle();              return end
+    if key == "m" then
+        local on = minimap:toggle()
+        showStatus("Minimap " .. (on and "on" or "off"), 2)
+        return
+    end
+    if key == "," then
+        if not stepWadLevel(-1) then showStatus("No WAD loaded", 2) end
+        return
+    end
+    if key == "." then
+        if not stepWadLevel(1) then showStatus("No WAD loaded", 2) end
+        return
+    end
     if key == "c" then
         castleConfig.seed = love.math.random(1, 999999)
         regenerateCastle()
@@ -308,6 +399,7 @@ function love.keypressed(key)
         local ok, err = WorldIO.load(world, renderer, blob)
         if ok then
             playerStart = nil  -- save doesn't preserve player-start metadata
+            clearWadSelection()
             undoManager:clear()
             showStatus("Loaded " .. QUICKSAVE_FILE, 4)
         else
@@ -357,6 +449,7 @@ function love.filedropped(file)
         local ok, err = WorldIO.load(world, renderer, data)
         if ok then
             playerStart = nil
+            clearWadSelection()
             undoManager:clear()
             showStatus("Loaded " .. file:getFilename(), 5)
         else
@@ -365,33 +458,14 @@ function love.filedropped(file)
         return
     end
 
-    local level, err = Wad.loadLevel(data)
-    if not level then
-        showStatus("Import failed: " .. tostring(err))
+    local levels, lerr = Wad.listLevels(data)
+    if not levels then
+        showStatus("Import failed: " .. tostring(lerr))
         return
     end
-
-    local ok, result, importedStart = pcall(Voxelizer.import, world, renderer, level)
-    if not ok then
-        showStatus("Voxelize failed: " .. tostring(result))
-        return
-    end
-
-    -- Recenter cameras on the imported map.
-    camera.targetPos = {world.width / 2, 0, world.depth / 2}
-    camera.distance = math.max(world.width, world.depth) * 0.7
-    playerStart = importedStart  -- nil if the WAD had no THING type 1
-    undoManager:clear()
-    if playerStart then
-        flyCam.pos = {playerStart.x, playerStart.y, playerStart.z}
-        flyCam.yaw = playerStart.yaw
-        flyCam.pitch = 0
-    else
-        flyCam.pos = {world.width / 2, math.max(8, world.height * 0.3), world.depth / 2}
-    end
-
-    showStatus(string.format("Imported %s (%d sectors, %d linedefs)",
-        level.name, #level.sectors, #level.linedefs), 8)
+    wadData = data
+    wadLevels = levels
+    loadWadLevel(1)
 end
 
 -- Expose a status getter so the UI can render the import banner.
