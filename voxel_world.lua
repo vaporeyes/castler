@@ -4,14 +4,21 @@
 local VoxelWorld = {}
 VoxelWorld.__index = VoxelWorld
 
--- Block ID -> RGB color lookup. Index 0 is Air (no color).
-VoxelWorld.PALETTE = {
-    [1] = {0.55, 0.55, 0.58}, -- Stone
-    [2] = {0.60, 0.40, 0.22}, -- Wood
-    [3] = {0.45, 0.30, 0.15}, -- Dirt
-    [4] = {0.35, 0.70, 0.30}, -- Grass
-    [5] = {0.85, 0.80, 0.60}, -- Sand
+-- User-placeable block metadata. Imported materials can still extend PALETTE
+-- directly without becoming hotbar entries.
+VoxelWorld.BLOCKS = {
+    [1] = {name = "Stone", color = {0.55, 0.55, 0.58}, placeable = true},
+    [2] = {name = "Wood",  color = {0.60, 0.40, 0.22}, placeable = true},
+    [3] = {name = "Dirt",  color = {0.45, 0.30, 0.15}, placeable = true},
+    [4] = {name = "Grass", color = {0.35, 0.70, 0.30}, placeable = true},
+    [5] = {name = "Sand",  color = {0.85, 0.80, 0.60}, placeable = true},
 }
+
+-- Block ID -> RGB color lookup. Index 0 is Air (no color).
+VoxelWorld.PALETTE = {}
+for id, meta in pairs(VoxelWorld.BLOCKS) do
+    VoxelWorld.PALETTE[id] = meta.color
+end
 
 function VoxelWorld.new(width, height, depth)
     local self = setmetatable({}, VoxelWorld)
@@ -71,6 +78,27 @@ function VoxelWorld:setBlock(x, y, z, id)
     end
     self.data[self:getIndex(x, y, z)] = id
     return true
+end
+
+function VoxelWorld:blockName(id)
+    local meta = self.BLOCKS[id]
+    return meta and meta.name or ("#" .. tostring(id))
+end
+
+function VoxelWorld:isPlaceableBlock(id)
+    local meta = self.BLOCKS[id]
+    return meta and meta.placeable == true
+end
+
+function VoxelWorld:placeableBlockIds()
+    local ids = {}
+    for id, meta in pairs(self.BLOCKS) do
+        if meta.placeable and self.PALETTE[id] then
+            ids[#ids + 1] = id
+        end
+    end
+    table.sort(ids)
+    return ids
 end
 
 -- Reset every cell to air. Faster than looping setBlock since we skip the

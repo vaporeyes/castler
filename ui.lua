@@ -14,16 +14,10 @@ local PANEL_MIN_WIDTH = 340
 local PANEL_TITLE = "Castler"
 local PANEL_HEADER_H = 30
 local PANEL_FOOTER_GLOW = 18
--- IDs above this are voxelizer-managed (per-sector lit colors from DOOM
--- imports). The hotbar should never grow to show them.
-local HOTBAR_MAX_ID = 5
-local BLOCK_NAMES = {
-    [1] = "Stone",
-    [2] = "Wood",
-    [3] = "Dirt",
-    [4] = "Grass",
-    [5] = "Sand",
-}
+local MENU_W = 300
+local MENU_PAD = 14
+local MENU_BUTTON_H = 34
+local MENU_GAP = 8
 
 local TOOL_LABELS = {
     brush  = "Brush",
@@ -43,9 +37,17 @@ function UI.new(world, builder, renderer, grid)
     self.panelY = 14
     self.panelW = PANEL_MIN_WIDTH
     self.panelH = 1
+    self.panelCollapsed = false
+    self.panelToggleRect = nil
     self.draggingPanel = false
     self.dragOffsetX = 0
     self.dragOffsetY = 0
+    self.hotbarOffset = 1
+    self.hotbarIds = {}
+    self.hotbarRect = nil
+    self.menuOpen = false
+    self.menuItems = {}
+    self.menuButtons = {}
     return self
 end
 
@@ -75,6 +77,9 @@ end
 
 local function drawInfoPanel(self, lines)
     local width, height, lineHeight = measureInfoPanel(lines)
+    if self.panelCollapsed then
+        height = PANEL_HEADER_H
+    end
     local sw, sh = love.graphics.getDimensions()
     local x = clamp(self.panelX, 0, math.max(0, sw - width))
     local y = clamp(self.panelY, 0, math.max(0, sh - height))
@@ -106,12 +111,22 @@ local function drawInfoPanel(self, lines)
     love.graphics.setColor(0.95, 0.97, 1, 1)
     love.graphics.print(PANEL_TITLE, x + PANEL_PAD_X, y + 8)
 
-    local dotY = y + 14
-    local dotX = x + width - PANEL_PAD_X - 26
-    love.graphics.setColor(0.48, 0.55, 0.68, 0.90)
-    love.graphics.circle("fill", dotX, dotY, 2.2)
-    love.graphics.circle("fill", dotX + 10, dotY, 2.2)
-    love.graphics.circle("fill", dotX + 20, dotY, 2.2)
+    local toggleSize = 20
+    local toggleX = x + width - PANEL_PAD_X - toggleSize
+    local toggleY = y + 5
+    self.panelToggleRect = {x = toggleX, y = toggleY, w = toggleSize, h = toggleSize}
+    love.graphics.setColor(0.48, 0.55, 0.68, 0.28)
+    love.graphics.rectangle("fill", toggleX, toggleY, toggleSize, toggleSize, 4, 4)
+    love.graphics.setColor(0.80, 0.86, 0.96, 0.95)
+    love.graphics.setLineWidth(1.5)
+    local cy = toggleY + toggleSize * 0.5
+    love.graphics.line(toggleX + 5, cy, toggleX + toggleSize - 5, cy)
+    if self.panelCollapsed then
+        local cx = toggleX + toggleSize * 0.5
+        love.graphics.line(cx, toggleY + 5, cx, toggleY + toggleSize - 5)
+    end
+
+    if self.panelCollapsed then return end
 
     love.graphics.setColor(0.18, 0.23, 0.33, 0.95)
     love.graphics.rectangle("fill", x, y + PANEL_HEADER_H, width, 1)
@@ -134,6 +149,19 @@ end
 
 function UI:mousepressed(x, y, button)
     if button ~= 1 then return false end
+    if self.hotbarRect and pointInRect(x, y,
+        self.hotbarRect.x, self.hotbarRect.y, self.hotbarRect.w, self.hotbarRect.h) then
+        local slot = math.floor((x - self.hotbarRect.x) / (SLOT_SIZE + SLOT_GAP)) + 1
+        local id = self.hotbarIds[slot]
+        if id then self.builder:setActiveBlock(id) end
+        return true
+    end
+    if self.panelToggleRect and pointInRect(x, y,
+        self.panelToggleRect.x, self.panelToggleRect.y,
+        self.panelToggleRect.w, self.panelToggleRect.h) then
+        self.panelCollapsed = not self.panelCollapsed
+        return true
+    end
     if pointInRect(x, y, self.panelX, self.panelY, self.panelW, self.panelH) then
         self.draggingPanel = true
         self.dragOffsetX = x - self.panelX
@@ -143,10 +171,58 @@ function UI:mousepressed(x, y, button)
     return false
 end
 
+function UI:wheelmoved(_, y)
+    if not self.hotbarRect or not love.mouse then return false end
+    local mx, my = love.mouse.getPosition()
+    if not pointInRect(mx, my, self.hotbarRect.x, self.hotbarRect.y, self.hotbarRect.w, self.hotbarRect.h) then
+        return false
+    end
+    local ids = self.world.placeableBlockIds and self.world:placeableBlockIds() or {}
+    local visible = self.hotbarRect.visible or #ids
+    local maxOffset = math.max(1, #ids - visible + 1)
+    self.hotbarOffset = clamp(self.hotbarOffset - y, 1, maxOffset)
+    return true
+end
+
+function UI:hotbarIdForSlot(slot)
+    return self.hotbarIds and self.hotbarIds[slot] or nil
+end
+
+function UI:setMenuItems(items)
+    self.menuItems = items or {}
+end
+
+function UI:toggleMenu()
+    self.menuOpen = not self.menuOpen
+    return self.menuOpen
+end
+
+function UI:setMenuOpen(open)
+    self.menuOpen = open and true or false
+end
+
+function UI:isMenuOpen()
+    return self.menuOpen
+end
+
 function UI:mousereleased(_, _, button)
     if button == 1 then
         self.draggingPanel = false
     end
+end
+
+function UI:menuMousepressed(x, y, button)
+    if not self.menuOpen then return false end
+    if button ~= 1 then return true end
+    for i = 1, #self.menuButtons do
+        local b = self.menuButtons[i]
+        if pointInRect(x, y, b.x, b.y, b.w, b.h) then
+            local item = self.menuItems[i]
+            if item and item.action then item.action() end
+            return true
+        end
+    end
+    return true
 end
 
 function UI:mousemoved(x, y)
@@ -182,6 +258,52 @@ local function drawSlot(x, y, color, active, label)
     love.graphics.print(label, x + 4, y + 2)
 end
 
+local function blockName(world, id)
+    if world and world.blockName then return world:blockName(id) end
+    return "#" .. tostring(id)
+end
+
+local function drawMenu(self, sw, sh)
+    if not self.menuOpen then return end
+
+    love.graphics.setColor(0.02, 0.03, 0.05, 0.58)
+    love.graphics.rectangle("fill", 0, 0, sw, sh)
+
+    local itemCount = #self.menuItems
+    local menuH = MENU_PAD * 2 + 28 + itemCount * MENU_BUTTON_H
+        + math.max(0, itemCount - 1) * MENU_GAP
+    local x = math.floor((sw - MENU_W) * 0.5)
+    local y = math.floor((sh - menuH) * 0.5)
+
+    love.graphics.setColor(0, 0, 0, 0.30)
+    love.graphics.rectangle("fill", x + 5, y + 6, MENU_W, menuH, PANEL_RADIUS, PANEL_RADIUS)
+    love.graphics.setColor(0.06, 0.08, 0.12, 0.96)
+    love.graphics.rectangle("fill", x, y, MENU_W, menuH, PANEL_RADIUS, PANEL_RADIUS)
+    love.graphics.setColor(0.38, 0.80, 1.00, 0.95)
+    love.graphics.rectangle("fill", x, y, MENU_W, 2, PANEL_RADIUS, PANEL_RADIUS)
+    love.graphics.setColor(0.20, 0.26, 0.37, 0.85)
+    love.graphics.rectangle("line", x + 0.5, y + 0.5, MENU_W - 1, menuH - 1, PANEL_RADIUS, PANEL_RADIUS)
+
+    love.graphics.setColor(0.95, 0.97, 1, 1)
+    love.graphics.printf("Menu", x, y + MENU_PAD - 2, MENU_W, "center")
+
+    local buttonY = y + MENU_PAD + 30
+    self.menuButtons = {}
+    for i = 1, itemCount do
+        local item = self.menuItems[i]
+        local bx = x + MENU_PAD
+        local by = buttonY + (i - 1) * (MENU_BUTTON_H + MENU_GAP)
+        local bw = MENU_W - MENU_PAD * 2
+        self.menuButtons[i] = {x = bx, y = by, w = bw, h = MENU_BUTTON_H}
+        love.graphics.setColor(0.12, 0.16, 0.24, 0.96)
+        love.graphics.rectangle("fill", bx, by, bw, MENU_BUTTON_H, 5, 5)
+        love.graphics.setColor(0.28, 0.36, 0.50, 0.90)
+        love.graphics.rectangle("line", bx + 0.5, by + 0.5, bw - 1, MENU_BUTTON_H - 1, 5, 5)
+        love.graphics.setColor(0.88, 0.92, 1.00, 1)
+        love.graphics.printf(item.label, bx, by + 9, bw, "center")
+    end
+end
+
 function UI:draw()
     love.graphics.push("all")
     love.graphics.setDepthMode()
@@ -189,29 +311,50 @@ function UI:draw()
     local sw, sh = love.graphics.getDimensions()
     local palette = self.world.PALETTE
 
-    -- Hotbar only ever shows the user-pickable IDs (1..HOTBAR_MAX_ID).
-    -- Sector-specific palette entries injected by the DOOM voxelizer live
-    -- well above this range and are not exposed for placement.
-    local maxId = 0
-    for id in pairs(palette) do
-        if id <= HOTBAR_MAX_ID and id > maxId then maxId = id end
+    local allHotbarIds = self.world.placeableBlockIds and self.world:placeableBlockIds() or {}
+    local visibleSlots = math.max(1, math.min(#allHotbarIds,
+        math.floor((sw - 32 + SLOT_GAP) / (SLOT_SIZE + SLOT_GAP))))
+    local maxOffset = math.max(1, #allHotbarIds - visibleSlots + 1)
+    self.hotbarOffset = clamp(self.hotbarOffset, 1, maxOffset)
+
+    local activeIndex = nil
+    for i = 1, #allHotbarIds do
+        if allHotbarIds[i] == self.builder.activeBlockId then
+            activeIndex = i
+            break
+        end
+    end
+    if activeIndex then
+        if activeIndex < self.hotbarOffset then
+            self.hotbarOffset = activeIndex
+        elseif activeIndex >= self.hotbarOffset + visibleSlots then
+            self.hotbarOffset = activeIndex - visibleSlots + 1
+        end
     end
 
-    local totalWidth = maxId * SLOT_SIZE + (maxId - 1) * SLOT_GAP
+    local hotbarIds = {}
+    for slot = 1, visibleSlots do
+        hotbarIds[slot] = allHotbarIds[self.hotbarOffset + slot - 1]
+    end
+    self.hotbarIds = hotbarIds
+
+    local totalWidth = #hotbarIds * SLOT_SIZE + math.max(0, #hotbarIds - 1) * SLOT_GAP
     local startX = (sw - totalWidth) * 0.5
     local y = sh - SLOT_SIZE - 16
+    self.hotbarRect = {x = startX, y = y, w = totalWidth, h = SLOT_SIZE, visible = visibleSlots}
 
-    for id = 1, maxId do
+    for slot = 1, #hotbarIds do
+        local id = hotbarIds[slot]
         local color = palette[id]
         if color then
-            local x = startX + (id - 1) * (SLOT_SIZE + SLOT_GAP)
-            drawSlot(x, y, color, id == self.builder.activeBlockId, tostring(id))
+            local x = startX + (slot - 1) * (SLOT_SIZE + SLOT_GAP)
+            drawSlot(x, y, color, id == self.builder.activeBlockId, tostring(slot))
         end
     end
 
     -- Status line above the hotbar: active block + tool.
     local active = self.builder.activeBlockId
-    local name = BLOCK_NAMES[active] or ("#" .. active)
+    local name = blockName(self.world, active)
     local toolLabel = TOOL_LABELS[self.builder.tool] or self.builder.tool
     local pendingTag = ""
     if self.builder.pending then
@@ -246,7 +389,7 @@ function UI:draw()
     -- Hover readout: what the build ray is currently pointing at.
     local h = self.builder and self.builder.hit
     if h then
-        local nm = BLOCK_NAMES[h.id] or ("#" .. tostring(h.id))
+        local nm = blockName(self.world, h.id)
         local line = string.format("Aim (%d,%d,%d)  %s [%d]", h.x, h.y, h.z, nm, h.id)
         if self.renderer and self.renderer.chunkCoordsOf then
             local ccx, ccy, ccz = self.renderer:chunkCoordsOf(h.x, h.y, h.z)
@@ -316,6 +459,8 @@ function UI:draw()
             love.graphics.printf(msg, 0, sh * 0.5 - 90, sw, "center")
         end
     end
+
+    drawMenu(self, sw, sh)
 
     love.graphics.pop()
 end

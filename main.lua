@@ -65,6 +65,12 @@ local SUN_POSITIONS = {
     {name = "Default",   dir = { 0.40, 0.86,  0.30}},
 }
 local sunIndex = 6
+local resetDefaultMap
+local regenerateCastle
+local saveQuicksave
+local loadQuicksave
+local setupMenu
+local setPauseMenu
 
 local function buildScene()
     -- Small reference castle near the world center so chunking is obvious.
@@ -120,11 +126,13 @@ function love.load()
     grid        = Grid.new(world, camera, renderer.chunkSize)
     ui          = UI.new(world, builder, renderer, grid)
     minimap     = Minimap.new(world)
+    setupMenu()
 end
 
 local function setCameraMode(mode)
     if mode == cameraMode then return end
     if mode == "fly" then
+        local fromRTS = cameraMode == "rts"
         if playerStart then
             flyCam.pos = {playerStart.x, playerStart.y, playerStart.z}
             flyCam.yaw = playerStart.yaw
@@ -137,6 +145,9 @@ local function setCameraMode(mode)
         -- you need free movement for building. setCollide() settles the
         -- camera onto the ground at the just-set position.
         flyCam:setCollide(true)
+        if fromRTS then
+            flyCam:transitionFromRTS(camera, flyCam.pos, flyCam.yaw, flyCam.pitch)
+        end
         flyCam:activate()
         activeCam = flyCam
     else
@@ -222,9 +233,45 @@ function GetWadInfo()
     return nil
 end
 
+local function fillFloor()
+    for x = 1, world.width do
+        for z = 1, world.depth do
+            world:setBlock(x, 1, z, 4)
+        end
+    end
+end
+
+local function resetTransientState()
+    playerStart = nil
+    clearWadSelection()
+    undoManager:clear()
+    builder:cancelPending()
+    particles = Particles.new()
+    builder.particles = particles
+    camera.targetPos = {WORLD_W / 2, 0, WORLD_D / 2}
+    camera.distance = 60
+    flyCam.pos = {WORLD_W / 2, 16, WORLD_D / 2}
+    flyCam.yaw = 0
+    flyCam.pitch = 0
+    flyCam.vy = 0
+    if cameraMode ~= "rts" then
+        setCameraMode("rts")
+    end
+end
+
+resetDefaultMap = function()
+    world:clear()
+    fillFloor()
+    buildScene()
+    renderer:markAllDirty()
+    renderer:flushDirty()
+    resetTransientState()
+    showStatus("New default map", 3)
+end
+
 -- Regenerate using the current (seed, size, keep) config and reset transient
 -- state, matching the behavior of WAD import and .castler load.
-local function regenerateCastle()
+regenerateCastle = function()
     local size = CASTLE_SIZES[castleConfig.sizeIndex]
     local keep = CASTLE_KEEPS[castleConfig.keepIndex]
     local result = CastleGenerator.generate(world, renderer, {
@@ -245,7 +292,69 @@ local function regenerateCastle()
         result.seed, size.name, keep), 4)
 end
 
+saveQuicksave = function()
+    local ok, size = WorldIO.save(world, QUICKSAVE_FILE)
+    if ok then
+        showStatus(string.format("Saved %s (%.1f KB)", QUICKSAVE_FILE, size / 1024), 4)
+    else
+        showStatus("Save failed: " .. tostring(size))
+    end
+end
+
+loadQuicksave = function()
+    if not love.filesystem.getInfo(QUICKSAVE_FILE) then
+        showStatus("No quicksave found - press F5 first")
+        return
+    end
+    local blob = love.filesystem.read(QUICKSAVE_FILE)
+    local ok, err = WorldIO.load(world, renderer, blob)
+    if ok then
+        playerStart = nil
+        clearWadSelection()
+        undoManager:clear()
+        builder:cancelPending()
+        showStatus("Loaded " .. QUICKSAVE_FILE, 4)
+    else
+        showStatus("Load failed: " .. tostring(err))
+    end
+end
+
+setupMenu = function()
+    ui:setMenuItems({
+        {label = "Resume", action = function() setPauseMenu(false) end},
+        {label = "New Default Map", action = function()
+            setPauseMenu(false)
+            resetDefaultMap()
+        end},
+        {label = "New Castle", action = function()
+            setPauseMenu(false)
+            castleConfig.seed = love.math.random(1, 999999)
+            regenerateCastle()
+        end},
+        {label = "Quicksave", action = function()
+            setPauseMenu(false)
+            saveQuicksave()
+        end},
+        {label = "Quickload", action = function()
+            setPauseMenu(false)
+            loadQuicksave()
+        end},
+        {label = "Quit", action = function() love.event.quit() end},
+    })
+end
+
+setPauseMenu = function(open)
+    ui:setMenuOpen(open)
+    if love.mouse and love.mouse.setRelativeMode then
+        love.mouse.setRelativeMode(false)
+        if not open and cameraMode == "fly" then
+            love.mouse.setRelativeMode(true)
+        end
+    end
+end
+
 function love.update(dt)
+    if ui and ui:isMenuOpen() then return end
     activeCam:update(dt)
     builder:update(dt)
     particles:update(dt)
@@ -290,10 +399,19 @@ end
 
 function love.keypressed(key)
     if key == "escape" then
-        if not builder:cancelPending() then love.event.quit() end
+        if ui and ui:isMenuOpen() then
+            setPauseMenu(false)
+        elseif not builder:cancelPending() then
+            setPauseMenu(true)
+        end
         return
     end
+    if ui and ui:isMenuOpen() then return end
     if key == "z" and modHeld() then
+        if stability and stability.hasPending and stability:hasPending() then
+            showStatus("Stability resolving - try undo in a moment", 2)
+            return
+        end
         if shiftDown() then
             local ok, n = undoManager:redo()
             showStatus(ok and string.format("Redo (%d cells)", n) or "Nothing to redo", 2)
@@ -304,6 +422,10 @@ function love.keypressed(key)
         return
     end
     if key == "y" and modHeld() then
+        if stability and stability.hasPending and stability:hasPending() then
+            showStatus("Stability resolving - try redo in a moment", 2)
+            return
+        end
         local ok, n = undoManager:redo()
         showStatus(ok and string.format("Redo (%d cells)", n) or "Nothing to redo", 2)
         return
@@ -382,39 +504,28 @@ function love.keypressed(key)
         return
     end
     if key == "f5" then
-        local ok, size = WorldIO.save(world, QUICKSAVE_FILE)
-        if ok then
-            showStatus(string.format("Saved %s (%.1f KB)", QUICKSAVE_FILE, size / 1024), 4)
-        else
-            showStatus("Save failed: " .. tostring(size))
-        end
+        saveQuicksave()
         return
     end
     if key == "f9" then
-        if not love.filesystem.getInfo(QUICKSAVE_FILE) then
-            showStatus("No quicksave found - press F5 first")
-            return
-        end
-        local blob = love.filesystem.read(QUICKSAVE_FILE)
-        local ok, err = WorldIO.load(world, renderer, blob)
-        if ok then
-            playerStart = nil  -- save doesn't preserve player-start metadata
-            clearWadSelection()
-            undoManager:clear()
-            showStatus("Loaded " .. QUICKSAVE_FILE, 4)
-        else
-            showStatus("Load failed: " .. tostring(err))
-        end
+        loadQuicksave()
         return
     end
 
     local n = tonumber(key)
-    if n and n >= 1 and n <= 5 then
-        builder:setActiveBlock(n)
+    if n then
+        local id = ui and ui.hotbarIdForSlot and ui:hotbarIdForSlot(n)
+        if not id then
+            local ids = world:placeableBlockIds()
+            id = ids[n]
+        end
+        if id then builder:setActiveBlock(id) end
     end
 end
 
 function love.mousepressed(x, y, b)
+    if ui and ui:menuMousepressed(x, y, b) then return end
+    if ui and ui:isMenuOpen() then return end
     if ui and ui:mousepressed(x, y, b) then return end
     if b == 3 then  -- middle click = eyedropper
         local picked = builder:eyedrop()
@@ -430,14 +541,20 @@ function love.mousepressed(x, y, b)
     builder:mousepressed(x, y, b)
 end
 function love.mousereleased(x, y, b)
+    if ui and ui:isMenuOpen() then return end
     if ui then ui:mousereleased(x, y, b) end
     activeCam:mousereleased(x, y, b)
 end
 function love.mousemoved(x, y, dx, dy)
+    if ui and ui:isMenuOpen() then return end
     if ui and ui:mousemoved(x, y, dx, dy) then return end
     activeCam:mousemoved(x, y, dx, dy)
 end
-function love.wheelmoved(x, y)        activeCam:wheelmoved(x, y)        end
+function love.wheelmoved(x, y)
+    if ui and ui:isMenuOpen() then return end
+    if ui and ui:wheelmoved(x, y) then return end
+    activeCam:wheelmoved(x, y)
+end
 
 function love.filedropped(file)
     file:open("r")

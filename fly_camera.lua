@@ -24,7 +24,9 @@ local JUMP_SPEED  = 8
 local WALK_SPEED  = 14
 local WALK_RUN    = 1.9     -- LShift multiplier on foot
 local MAX_SUBSTEP = 0.4     -- cap per-substep travel so we never tunnel
+local MAX_SUBSTEPS_PER_FRAME = 10
 local EPS         = 1e-4
+local TRANSITION_SECONDS = 0.30
 
 function Fly.new(opts)
     opts = opts or {}
@@ -41,6 +43,7 @@ function Fly.new(opts)
     self.collide = false               -- false = noclip fly, true = walk
     self.vy = 0
     self.onGround = false
+    self.transition = nil
     return self
 end
 
@@ -187,7 +190,7 @@ local function updateWalk(self, dt)
 
     -- Sub-step so a single fast frame can't tunnel through a wall.
     local biggest = math.max(math.abs(dx), math.abs(dy), math.abs(dz))
-    local steps = math.max(1, math.ceil(biggest / MAX_SUBSTEP))
+    local steps = math.min(MAX_SUBSTEPS_PER_FRAME, math.max(1, math.ceil(biggest / MAX_SUBSTEP)))
     local sx, sy, sz = dx / steps, dy / steps, dz / steps
 
     for _ = 1, steps do
@@ -239,6 +242,25 @@ end
 
 function Fly:update(dt)
     if not self.active or not love.keyboard then return end
+    if self.transition then
+        local tr = self.transition
+        tr.t = math.min(tr.duration, tr.t + dt)
+        local a = tr.t / tr.duration
+        -- Smoothstep keeps the handoff continuous without overshooting.
+        a = a * a * (3 - 2 * a)
+        self.pos[1] = tr.fromPos[1] + (tr.toPos[1] - tr.fromPos[1]) * a
+        self.pos[2] = tr.fromPos[2] + (tr.toPos[2] - tr.fromPos[2]) * a
+        self.pos[3] = tr.fromPos[3] + (tr.toPos[3] - tr.fromPos[3]) * a
+        self.yaw = tr.fromYaw + (tr.toYaw - tr.fromYaw) * a
+        self.pitch = tr.fromPitch + (tr.toPitch - tr.fromPitch) * a
+        if tr.t >= tr.duration then
+            self.pos = {tr.toPos[1], tr.toPos[2], tr.toPos[3]}
+            self.yaw = tr.toYaw
+            self.pitch = tr.toPitch
+            self.transition = nil
+        end
+        return
+    end
     if self.collide and self.world then
         updateWalk(self, dt)
     else
@@ -247,7 +269,7 @@ function Fly:update(dt)
 end
 
 function Fly:mousemoved(_, _, dx, dy)
-    if not self.active then return end
+    if not self.active or self.transition then return end
     self.yaw   = self.yaw   - dx * MOUSE_SENS
     self.pitch = self.pitch - dy * MOUSE_SENS
     if self.pitch >  PITCH_LIMIT then self.pitch =  PITCH_LIMIT end
@@ -272,6 +294,24 @@ function Fly:syncFromRTS(rts)
     self.pitch = -rts.cPitch
     self.vy = 0
     if self.collide then self:settleToGround() end
+end
+
+function Fly:transitionFromRTS(rts, toPos, toYaw, toPitch)
+    local eye = rts:eye()
+    self.transition = {
+        fromPos = {eye[1], eye[2], eye[3]},
+        fromYaw = rts.cYaw,
+        fromPitch = -rts.cPitch,
+        toPos = {toPos[1], toPos[2], toPos[3]},
+        toYaw = toYaw,
+        toPitch = toPitch,
+        t = 0,
+        duration = TRANSITION_SECONDS,
+    }
+    self.pos = {eye[1], eye[2], eye[3]}
+    self.yaw = rts.cYaw
+    self.pitch = -rts.cPitch
+    self.vy = 0
 end
 
 function Fly:activate()

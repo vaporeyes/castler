@@ -150,15 +150,22 @@ local function rasterizePolygon(edges, t, fn)
     -- Pre-transform edge endpoints into world XZ space.
     local we = {}
     local zMinW, zMaxW = math.huge, -math.huge
+    local xMinW, xMaxW = math.huge, -math.huge
     for _, e in ipairs(edges) do
         local wx1 = txX(t, e.x1); local wz1 = txZ(t, e.y1)
         local wx2 = txX(t, e.x2); local wz2 = txZ(t, e.y2)
         we[#we + 1] = { x1 = wx1, z1 = wz1, x2 = wx2, z2 = wz2 }
+        if wx1 < xMinW then xMinW = wx1 end
+        if wx2 < xMinW then xMinW = wx2 end
+        if wx1 > xMaxW then xMaxW = wx1 end
+        if wx2 > xMaxW then xMaxW = wx2 end
         if wz1 < zMinW then zMinW = wz1 end
         if wz2 < zMinW then zMinW = wz2 end
         if wz1 > zMaxW then zMaxW = wz1 end
         if wz2 > zMaxW then zMaxW = wz2 end
     end
+    if xMinW == math.huge then return end
+    local maxScanSpan = math.max(0, xMaxW - xMinW) + 1.0
 
     local zStart = math.max(1, math.floor(zMinW))
     local zEnd   = math.min(t.worldD, math.ceil(zMaxW))
@@ -185,12 +192,18 @@ local function rasterizePolygon(edges, t, fn)
             for i = count + 1, #intersections do intersections[i] = nil end
             table.sort(intersections)
             for i = 1, count - 1, 2 do
-                local xa = intersections[i]
-                local xb = intersections[i + 1]
-                local xs = math.max(1,         math.ceil(xa))
-                local xe = math.min(t.worldW,  math.floor(xb))
-                for x = xs, xe do
-                    fn(x, z)
+                local rawXa = intersections[i]
+                local rawXb = intersections[i + 1]
+                if rawXb - rawXa <= maxScanSpan then
+                    local xa = math.max(xMinW, rawXa)
+                    local xb = math.min(xMaxW, rawXb)
+                    if xa <= xb then
+                        local xs = math.max(1,         math.ceil(xa))
+                        local xe = math.min(t.worldW,  math.floor(xb))
+                        for x = xs, xe do
+                            fn(x, z)
+                        end
+                    end
                 end
             end
         end

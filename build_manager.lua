@@ -23,11 +23,26 @@ local CUBE_EDGES = {
     {1,5}, {2,6}, {3,7}, {4,8},  -- along Z
 }
 
+local PREVIEW_VERTEX_FORMAT = {
+    {"VertexPosition", "float", 3},
+    {"VertexColor",    "float", 4},
+}
+
+local PREVIEW_FACES = {
+    {n = { 1, 0, 0}, verts = {{1,0,0},{1,0,1},{1,1,1},{1,1,0}}},
+    {n = {-1, 0, 0}, verts = {{0,0,1},{0,0,0},{0,1,0},{0,1,1}}},
+    {n = { 0, 1, 0}, verts = {{0,1,0},{0,1,1},{1,1,1},{1,1,0}}},
+    {n = { 0,-1, 0}, verts = {{0,0,1},{0,0,0},{1,0,0},{1,0,1}}},
+    {n = { 0, 0, 1}, verts = {{1,0,1},{0,0,1},{0,1,1},{1,1,1}}},
+    {n = { 0, 0,-1}, verts = {{0,0,0},{1,0,0},{1,1,0},{0,1,0}}},
+}
+
 local TOOL_BRUSH  = "brush"
 local TOOL_LINE   = "line"
 local TOOL_RECT   = "rect"
 local TOOL_BOX    = "box"
 local TOOL_SPHERE = "sphere"
+local STABILITY_BUDGET_SECONDS = 0.002
 
 function BuildManager.new(world, renderer, camera, stability, particles, undo)
     local self = setmetatable({}, BuildManager)
@@ -53,6 +68,11 @@ function BuildManager.new(world, renderer, camera, stability, particles, undo)
     -- above the floor to point at. Reset whenever an op completes/cancels.
     self.heightOffset = 0
     self._heightAccum = 0
+    self.pendingUndoOps = {}
+    self.previewMesh = nil
+    self.previewKey = nil
+    self.previewVerts = {}
+    self.previewIdxs = {}
     return self
 end
 
@@ -209,6 +229,31 @@ local function dda(world, origin, dir, maxDist)
 end
 
 function BuildManager:update(dt)
+    if self.stability and self.stability.update then
+        local collapsed = self.stability:update(STABILITY_BUDGET_SECONDS, function(x, y, z, oldId, undoOp)
+            if self.undo and undoOp then
+                self.undo:recordChangeToOp(undoOp, x, y, z, oldId, 0)
+                self.pendingUndoOps[undoOp] = true
+            elseif self.undo then
+                self.undo:beginOp()
+                self.undo:recordChange(x, y, z, oldId, 0)
+                self.undo:endOp()
+            end
+            self.renderer:markDirty(x, y, z)
+            local col = self.world.PALETTE[oldId] or {1, 1, 1}
+            self.particles:spawnBlock(x, y, z, col)
+        end)
+        if collapsed > 0 then
+            self.renderer:flushDirty()
+        end
+        if self.undo and self.stability.hasPending and not self.stability:hasPending() then
+            for op in pairs(self.pendingUndoOps) do
+                self.undo:finalizeOp(op)
+                self.pendingUndoOps[op] = nil
+            end
+        end
+    end
+
     -- Smooth hold-to-repeat for height adjustment while an op is pending.
     if self.pending and toolUsesHeightOffset(self.tool) and love.keyboard then
         local rate = 10  -- cells per second
@@ -437,7 +482,7 @@ function BuildManager:applyCells(cells, mode)
     local id = self.activeBlockId
     local renderer = self.renderer
     local undo = self.undo
-    if undo then undo:beginOp() end
+    local undoOp = undo and undo:beginOp() or nil
 
     if mode == "remove" then
         for i = 1, #cells, 3 do
@@ -457,16 +502,21 @@ function BuildManager:applyCells(cells, mode)
         if changed then
             for i = 1, #cells, 3 do
                 local x, y, z = cells[i], cells[i+1], cells[i+2]
-                local collapsed = self.stability:checkStability(x, y, z)
-                for j = 1, #collapsed, 4 do
-                    local cx = collapsed[j]
-                    local cy = collapsed[j+1]
-                    local cz = collapsed[j+2]
-                    local oldId = collapsed[j+3]
-                    if undo then undo:recordChange(cx, cy, cz, oldId, 0) end
-                    renderer:markDirty(cx, cy, cz)
-                    local col = world.PALETTE[oldId] or {1, 1, 1}
-                    self.particles:spawnBlock(cx, cy, cz, col)
+                if self.stability.enqueueCheck then
+                    self.stability:enqueueCheck(x, y, z, undoOp)
+                    if undoOp then self.pendingUndoOps[undoOp] = true end
+                else
+                    local collapsed = self.stability:checkStability(x, y, z)
+                    for j = 1, #collapsed, 4 do
+                        local cx = collapsed[j]
+                        local cy = collapsed[j+1]
+                        local cz = collapsed[j+2]
+                        local oldId = collapsed[j+3]
+                        if undo then undo:recordChange(cx, cy, cz, oldId, 0) end
+                        renderer:markDirty(cx, cy, cz)
+                        local col = world.PALETTE[oldId] or {1, 1, 1}
+                        self.particles:spawnBlock(cx, cy, cz, col)
+                    end
                 end
             end
         end
@@ -483,7 +533,13 @@ function BuildManager:applyCells(cells, mode)
         end
     end
     if changed then renderer:flushDirty() end
-    if undo then undo:endOp() end
+    if undo then
+        if changed and mode == "remove" and self.stability.enqueueCheck then
+            undo:endOp(true)
+        else
+            undo:endOp()
+        end
+    end
     return changed
 end
 
@@ -511,6 +567,134 @@ local function drawGhostCube(mvp, sw, sh, cellX, cellY, cellZ, colorR, colorG, c
             love.graphics.line(a[1], a[2], b[1], b[2])
         end
     end
+end
+
+local function drawGhostBox(mvp, sw, sh, cells, colorR, colorG, colorB)
+    local xLo, yLo, zLo = math.huge, math.huge, math.huge
+    local xHi, yHi, zHi = -math.huge, -math.huge, -math.huge
+    for i = 1, #cells, 3 do
+        local x, y, z = cells[i], cells[i + 1], cells[i + 2]
+        if x < xLo then xLo = x end
+        if y < yLo then yLo = y end
+        if z < zLo then zLo = z end
+        if x > xHi then xHi = x end
+        if y > yHi then yHi = y end
+        if z > zHi then zHi = z end
+    end
+    if xLo == math.huge then return end
+
+    local inset = 0.02
+    local x0 = xLo - 1 + inset; local x1 = xHi - inset
+    local y0 = yLo - 1 + inset; local y1 = yHi - inset
+    local z0 = zLo - 1 + inset; local z1 = zHi - inset
+    local screen = {}
+    for i = 1, 8 do
+        local c = CUBE_CORNERS[i]
+        local x = (c[1] == 0) and x0 or x1
+        local y = (c[2] == 0) and y0 or y1
+        local z = (c[3] == 0) and z0 or z1
+        local sx, sy, vis = projectPoint(mvp, sw, sh, x, y, z)
+        screen[i] = vis and {sx, sy} or nil
+    end
+
+    love.graphics.setColor(colorR, colorG, colorB, 1)
+    for _, e in ipairs(CUBE_EDGES) do
+        local a = screen[e[1]]
+        local b = screen[e[2]]
+        if a and b then
+            love.graphics.line(a[1], a[2], b[1], b[2])
+        end
+    end
+end
+
+local function cellKey(x, y, z)
+    return x .. "," .. y .. "," .. z
+end
+
+local function previewMeshKey(cells, colorR, colorG, colorB)
+    local xLo, yLo, zLo = math.huge, math.huge, math.huge
+    local xHi, yHi, zHi = -math.huge, -math.huge, -math.huge
+    local checksum = 0
+    for i = 1, #cells, 3 do
+        local x, y, z = cells[i], cells[i + 1], cells[i + 2]
+        checksum = checksum + x * 73856093 + y * 19349663 + z * 83492791
+        if x < xLo then xLo = x end
+        if y < yLo then yLo = y end
+        if z < zLo then zLo = z end
+        if x > xHi then xHi = x end
+        if y > yHi then yHi = y end
+        if z > zHi then zHi = z end
+    end
+    return table.concat({
+        #cells, checksum, xLo, yLo, zLo, xHi, yHi, zHi,
+        math.floor(colorR * 255), math.floor(colorG * 255), math.floor(colorB * 255),
+    }, ":")
+end
+
+local function updatePreviewMesh(self, cells, colorR, colorG, colorB)
+    local key = previewMeshKey(cells, colorR, colorG, colorB)
+    if self.previewMesh and self.previewKey == key then return self.previewMesh end
+
+    local present = {}
+    for i = 1, #cells, 3 do
+        present[cellKey(cells[i], cells[i + 1], cells[i + 2])] = true
+    end
+
+    local verts = self.previewVerts
+    local idxs = self.previewIdxs
+    local vCount, iCount, vIndex = 0, 0, 0
+    for i = 1, #cells, 3 do
+        local x, y, z = cells[i], cells[i + 1], cells[i + 2]
+        for f = 1, #PREVIEW_FACES do
+            local face = PREVIEW_FACES[f]
+            if not present[cellKey(x + face.n[1], y + face.n[2], z + face.n[3])] then
+                local baseX, baseY, baseZ = x - 1, y - 1, z - 1
+                for v = 1, 4 do
+                    local p = face.verts[v]
+                    vCount = vCount + 1
+                    verts[vCount] = {
+                        baseX + p[1], baseY + p[2], baseZ + p[3],
+                        colorR, colorG, colorB, 0.22,
+                    }
+                end
+                idxs[iCount + 1] = vIndex + 1
+                idxs[iCount + 2] = vIndex + 2
+                idxs[iCount + 3] = vIndex + 3
+                idxs[iCount + 4] = vIndex + 1
+                idxs[iCount + 5] = vIndex + 3
+                idxs[iCount + 6] = vIndex + 4
+                iCount = iCount + 6
+                vIndex = vIndex + 4
+            end
+        end
+    end
+    for i = vCount + 1, #verts do verts[i] = nil end
+    for i = iCount + 1, #idxs do idxs[i] = nil end
+
+    if vCount == 0 then return nil end
+    self.previewMesh = love.graphics.newMesh(PREVIEW_VERTEX_FORMAT, verts, "triangles", "dynamic")
+    self.previewMesh:setVertexMap(idxs)
+    self.previewMesh:setDrawRange(1, iCount)
+    self.previewKey = key
+    return self.previewMesh
+end
+
+local function drawPreviewMesh(self, cells, view, proj, colorR, colorG, colorB)
+    local mesh = updatePreviewMesh(self, cells, colorR, colorG, colorB)
+    if not mesh or not self.renderer or not self.renderer.shader then return false end
+    love.graphics.push("all")
+    love.graphics.setDepthMode("lequal", false)
+    love.graphics.setBlendMode("alpha")
+    love.graphics.setShader(self.renderer.shader)
+    self.renderer.shader:send("u_view", "column", view)
+    self.renderer.shader:send("u_proj", "column", proj)
+    self.renderer.shader:send("u_fogColor", self.renderer.FOG_COLOR)
+    self.renderer.shader:send("u_fogStart", self.renderer.FOG_START)
+    self.renderer.shader:send("u_fogEnd", self.renderer.FOG_END)
+    self.renderer.shader:send("u_fogEnabled", 0.0)
+    love.graphics.draw(mesh)
+    love.graphics.pop()
+    return true
 end
 
 function BuildManager:draw()
@@ -543,48 +727,30 @@ function BuildManager:draw()
 
     local cells = self:cellsForOperation(endX, endY, endZ, nx and normalToAxis(nx, ny, nz) or nil)
 
-    -- Sphere/box previews can be thousands of cells. To keep the wireframe
-    -- pass cheap, when the result is large we render only "shell" cells -
-    -- cells that are missing at least one neighbor inside the set. The result
-    -- is visually identical (the interior cubes would have been hidden behind
-    -- the outer ones anyway) at a fraction of the line-draw cost.
+    -- Sphere/box previews can be thousands of cells. Above the cap, draw one
+    -- operation bounds outline instead of thousands of per-cell line batches.
     local PREVIEW_FULL_CAP = 500
     local total = #cells / 3
-    local previewCells = cells
-    if total > PREVIEW_FULL_CAP then
-        local present = {}
-        for i = 1, #cells, 3 do
-            present[cells[i] .. "," .. cells[i+1] .. "," .. cells[i+2]] = true
-        end
-        previewCells = {}
-        for i = 1, #cells, 3 do
-            local x, y, z = cells[i], cells[i+1], cells[i+2]
-            if not (present[(x+1)..","..y..","..z]
-                and present[(x-1)..","..y..","..z]
-                and present[x..","..(y+1)..","..z]
-                and present[x..","..(y-1)..","..z]
-                and present[x..","..y..","..(z+1)]
-                and present[x..","..y..","..(z-1)]) then
-                previewCells[#previewCells+1] = x
-                previewCells[#previewCells+1] = y
-                previewCells[#previewCells+1] = z
-            end
-        end
-    end
 
     love.graphics.push("all")
     love.graphics.setDepthMode()
 
-    -- Outline the exact solid block under the ray (what right-click breaks),
-    -- in a neutral color distinct from the colored placement ghost.
-    if self.hit then
+    -- Outline the exact solid block under the ray only while placing. Remove
+    -- mode already previews the affected block directly.
+    if self.hit and mode ~= "remove" then
         love.graphics.setLineWidth(1.5)
-        drawGhostCube(mvp, sw, sh, self.hit.x, self.hit.y, self.hit.z, 0.92, 0.94, 1.0)
+        drawGhostCube(mvp, sw, sh, self.hit.x, self.hit.y, self.hit.z, 0.55, 0.62, 0.74)
     end
 
     love.graphics.setLineWidth(2)
-    for i = 1, #previewCells, 3 do
-        drawGhostCube(mvp, sw, sh, previewCells[i], previewCells[i+1], previewCells[i+2], colorR, colorG, colorB)
+    if total > PREVIEW_FULL_CAP then
+        if not drawPreviewMesh(self, cells, view, proj, colorR, colorG, colorB) then
+            drawGhostBox(mvp, sw, sh, cells, colorR, colorG, colorB)
+        end
+    else
+        for i = 1, #cells, 3 do
+            drawGhostCube(mvp, sw, sh, cells[i], cells[i+1], cells[i+2], colorR, colorG, colorB)
+        end
     end
 
     -- Highlight the pending start point with a thicker outline so the anchor is obvious.
@@ -630,7 +796,7 @@ function BuildManager:mousepressed(_, _, button)
         return
     end
 
-    -- Second click: commit using the pending mode (sticky from first click —
+    -- Second click: commit using the pending mode (sticky from first click
     -- avoids accidentally mixing place and remove mid-operation if Shift slips).
     local p = self.pending
     local cells = self:cellsForOperation(x, y, z, p.axis)
@@ -644,6 +810,8 @@ BuildManager.TOOLS = {
     brush = TOOL_BRUSH,
     line  = TOOL_LINE,
     rect  = TOOL_RECT,
+    box   = TOOL_BOX,
+    sphere = TOOL_SPHERE,
 }
 
 return BuildManager

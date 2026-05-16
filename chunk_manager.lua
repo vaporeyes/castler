@@ -124,16 +124,31 @@ function ChunkManager.new(world)
     self.chunkCount = self.chunkW * self.chunkH * self.chunkD
 
     self.chunks = {}
+    self.dirtyChunks = {}
     for cz = 0, self.chunkD - 1 do
         for cy = 0, self.chunkH - 1 do
             for cx = 0, self.chunkW - 1 do
-                self.chunks[self:chunkKey(cx, cy, cz)] = newChunk(cx, cy, cz)
+                local key = self:chunkKey(cx, cy, cz)
+                self.chunks[key] = newChunk(cx, cy, cz)
+                self.dirtyChunks[key] = true
             end
         end
     end
 
     self:flushDirty()
     return self
+end
+
+function ChunkManager:markChunkDirty(cx, cy, cz)
+    local key = self:chunkKey(cx, cy, cz)
+    local chunk = self.chunks[key]
+    if not chunk then return end
+    if chunk.dirty then
+        self.dirtyChunks[key] = true
+        return
+    end
+    chunk.dirty = true
+    self.dirtyChunks[key] = true
 end
 
 function ChunkManager:chunkKey(cx, cy, cz)
@@ -152,7 +167,7 @@ end
 function ChunkManager:markDirty(x, y, z)
     if not self.world:inBounds(x, y, z) then return end
     local cx, cy, cz = self:chunkCoordsOf(x, y, z)
-    self.chunks[self:chunkKey(cx, cy, cz)].dirty = true
+    self:markChunkDirty(cx, cy, cz)
 
     for i = 1, 6 do
         local o = NEIGHBOR_OFFSETS[i]
@@ -160,10 +175,96 @@ function ChunkManager:markDirty(x, y, z)
         if self.world:inBounds(nx, ny, nz) then
             local ncx, ncy, ncz = self:chunkCoordsOf(nx, ny, nz)
             if ncx ~= cx or ncy ~= cy or ncz ~= cz then
-                self.chunks[self:chunkKey(ncx, ncy, ncz)].dirty = true
+                self:markChunkDirty(ncx, ncy, ncz)
             end
         end
     end
+end
+
+local FACE_SPANS = {
+    {u = 2, v = 3}, {u = 2, v = 3},
+    {u = 1, v = 3}, {u = 1, v = 3},
+    {u = 1, v = 2}, {u = 1, v = 2},
+}
+
+local function setCoord(out, axis, value)
+    out[axis] = value
+end
+
+local function faceAoKey(world, face, x, y, z)
+    local key = 0
+    for v = 1, 4 do
+        local sample = face.ao[v]
+        local o1, o2, oc = sample[1], sample[2], sample[3]
+        local s1 = world:getBlock(x+o1[1], y+o1[2], z+o1[3]) ~= 0
+        local s2 = world:getBlock(x+o2[1], y+o2[2], z+o2[3]) ~= 0
+        local sc = world:getBlock(x+oc[1], y+oc[2], z+oc[3]) ~= 0
+        key = key * 4 + aoLevel(s1, s2, sc)
+    end
+    return key
+end
+
+local function addMergedFace(world, palette, verts, idxs, faceIndex, x, y, z, sizes, vCount, iCount, vIndex)
+    local face = FACES[faceIndex]
+    local id = world:getBlock(x, y, z)
+    local col = palette[id] or {1, 0, 1}
+    local shade = face.shade
+    local fr, fg, fb = col[1] * shade, col[2] * shade, col[3] * shade
+    local ao = face.ao
+    local m1, m2, m3, m4
+
+    local function scaledVertex(vp)
+        if faceIndex == 1 then
+            return x, y - 1 + vp[2] * sizes[2], z - 1 + vp[3] * sizes[3]
+        elseif faceIndex == 2 then
+            return x - 1, y - 1 + vp[2] * sizes[2], z - 1 + vp[3] * sizes[3]
+        elseif faceIndex == 3 then
+            return x - 1 + vp[1] * sizes[1], y, z - 1 + vp[3] * sizes[3]
+        elseif faceIndex == 4 then
+            return x - 1 + vp[1] * sizes[1], y - 1, z - 1 + vp[3] * sizes[3]
+        elseif faceIndex == 5 then
+            return x - 1 + vp[1] * sizes[1], y - 1 + vp[2] * sizes[2], z
+        else
+            return x - 1 + vp[1] * sizes[1], y - 1 + vp[2] * sizes[2], z - 1
+        end
+    end
+
+    for v = 1, 4 do
+        local vp = face.verts[v]
+        local sx = x + ((sizes[1] > 1 and vp[1] == 1) and (sizes[1] - 1) or 0)
+        local sy = y + ((sizes[2] > 1 and vp[2] == 1) and (sizes[2] - 1) or 0)
+        local sz = z + ((sizes[3] > 1 and vp[3] == 1) and (sizes[3] - 1) or 0)
+        local sample = ao[v]
+        local o1, o2, oc = sample[1], sample[2], sample[3]
+        local s1 = world:getBlock(sx+o1[1], sy+o1[2], sz+o1[3]) ~= 0
+        local s2 = world:getBlock(sx+o2[1], sy+o2[2], sz+o2[3]) ~= 0
+        local sc = world:getBlock(sx+oc[1], sy+oc[2], sz+oc[3]) ~= 0
+        local m = AO_MUL[aoLevel(s1, s2, sc)]
+        if     v == 1 then m1 = m
+        elseif v == 2 then m2 = m
+        elseif v == 3 then m3 = m
+        else               m4 = m end
+        local vx, vy, vz = scaledVertex(vp)
+        vCount = vCount + 1
+        verts[vCount] = {vx, vy, vz, fr * m, fg * m, fb * m, 1}
+    end
+
+    if m1 + m3 < m2 + m4 then
+        idxs[iCount + 1] = vIndex + 2
+        idxs[iCount + 2] = vIndex + 3
+        idxs[iCount + 3] = vIndex + 4
+        idxs[iCount + 4] = vIndex + 2
+        idxs[iCount + 5] = vIndex + 4
+        idxs[iCount + 6] = vIndex + 1
+    else
+        idxs[iCount + 1] = vIndex + 1
+        idxs[iCount + 2] = vIndex + 2
+        idxs[iCount + 3] = vIndex + 3
+        idxs[iCount + 4] = vIndex + 1
+        idxs[iCount + 5] = vIndex + 3
+        idxs[iCount + 6] = vIndex + 4
+    end
+    return vCount, iCount + 6, vIndex + 4
 end
 
 function ChunkManager:regenerateChunk(chunk)
@@ -180,64 +281,96 @@ function ChunkManager:regenerateChunk(chunk)
     local xMax = math.min(x0 + CHUNK_SIZE - 1, world.width)
     local yMax = math.min(y0 + CHUNK_SIZE - 1, world.height)
     local zMax = math.min(z0 + CHUNK_SIZE - 1, world.depth)
+    local mins = {x0, y0, z0}
+    local maxs = {xMax, yMax, zMax}
+    local maskId = {}
+    local maskAo = {}
+    local coord = {}
+    local sizes = {}
 
-    for z = z0, zMax do
-        for y = y0, yMax do
-            for x = x0, xMax do
-                local id = world:getBlock(x, y, z)
-                if id ~= 0 then
-                    local col = palette[id] or {1, 0, 1}
-                    local r, g, b = col[1], col[2], col[3]
-                    local baseX, baseY, baseZ = x - 1, y - 1, z - 1
+    for faceIndex = 1, 6 do
+        local face = FACES[faceIndex]
+        local span = FACE_SPANS[faceIndex]
+        local normalAxis
+        if face.dx ~= 0 then normalAxis = 1
+        elseif face.dy ~= 0 then normalAxis = 2
+        else normalAxis = 3 end
 
-                    for f = 1, 6 do
-                        local face = FACES[f]
-                        if world:getBlock(x + face.dx, y + face.dy, z + face.dz) == 0 then
-                            local shade = face.shade
-                            local fr, fg, fb = r * shade, g * shade, b * shade
-                            local ao = face.ao
-                            local m1, m2, m3, m4
+        local uAxis, vAxis = span.u, span.v
+        local uMin, uMax = mins[uAxis], maxs[uAxis]
+        local vMin, vMax = mins[vAxis], maxs[vAxis]
+        local uCount = uMax - uMin + 1
+        local vCount2 = vMax - vMin + 1
 
-                            for v = 1, 4 do
-                                local vp = face.verts[v]
-                                local sample = ao[v]
-                                local o1, o2, oc = sample[1], sample[2], sample[3]
-                                local s1 = world:getBlock(x+o1[1], y+o1[2], z+o1[3]) ~= 0
-                                local s2 = world:getBlock(x+o2[1], y+o2[2], z+o2[3]) ~= 0
-                                local sc = world:getBlock(x+oc[1], y+oc[2], z+oc[3]) ~= 0
-                                local m = AO_MUL[aoLevel(s1, s2, sc)]
-                                if     v == 1 then m1 = m
-                                elseif v == 2 then m2 = m
-                                elseif v == 3 then m3 = m
-                                else               m4 = m end
-                                vCount = vCount + 1
-                                verts[vCount] = {
-                                    baseX + vp[1], baseY + vp[2], baseZ + vp[3],
-                                    fr * m, fg * m, fb * m, 1,
-                                }
-                            end
+        for w = mins[normalAxis], maxs[normalAxis] do
+            for i = 1, uCount * vCount2 do
+                maskId[i] = nil
+                maskAo[i] = nil
+            end
 
-                            -- Flip the quad's diagonal when AO is anisotropic
-                            -- so the darkened corner is shared by both tris,
-                            -- avoiding the classic AO interpolation seam.
-                            if m1 + m3 < m2 + m4 then
-                                idxs[iCount + 1] = vIndex + 2
-                                idxs[iCount + 2] = vIndex + 3
-                                idxs[iCount + 3] = vIndex + 4
-                                idxs[iCount + 4] = vIndex + 2
-                                idxs[iCount + 5] = vIndex + 4
-                                idxs[iCount + 6] = vIndex + 1
-                            else
-                                idxs[iCount + 1] = vIndex + 1
-                                idxs[iCount + 2] = vIndex + 2
-                                idxs[iCount + 3] = vIndex + 3
-                                idxs[iCount + 4] = vIndex + 1
-                                idxs[iCount + 5] = vIndex + 3
-                                idxs[iCount + 6] = vIndex + 4
-                            end
-                            iCount = iCount + 6
-                            vIndex = vIndex + 4
+            for vv = vMin, vMax do
+                for uu = uMin, uMax do
+                    setCoord(coord, normalAxis, w)
+                    setCoord(coord, uAxis, uu)
+                    setCoord(coord, vAxis, vv)
+                    local x, y, z = coord[1], coord[2], coord[3]
+                    local id = world:getBlock(x, y, z)
+                    if id ~= 0 and world:getBlock(x + face.dx, y + face.dy, z + face.dz) == 0 then
+                        local idx = (vv - vMin) * uCount + (uu - uMin) + 1
+                        maskId[idx] = id
+                        maskAo[idx] = faceAoKey(world, face, x, y, z)
+                    end
+                end
+            end
+
+            for vv = vMin, vMax do
+                local u = uMin
+                while u <= uMax do
+                    local idx = (vv - vMin) * uCount + (u - uMin) + 1
+                    local id = maskId[idx]
+                    if id then
+                        local aoKey = maskAo[idx]
+                        local rectW = 1
+                        while u + rectW <= uMax do
+                            local nextIdx = (vv - vMin) * uCount + (u + rectW - uMin) + 1
+                            if maskId[nextIdx] ~= id or maskAo[nextIdx] ~= aoKey then break end
+                            rectW = rectW + 1
                         end
+
+                        local rectH = 1
+                        local canGrow = true
+                        while vv + rectH <= vMax and canGrow do
+                            for du = 0, rectW - 1 do
+                                local rowIdx = (vv + rectH - vMin) * uCount + (u + du - uMin) + 1
+                                if maskId[rowIdx] ~= id or maskAo[rowIdx] ~= aoKey then
+                                    canGrow = false
+                                    break
+                                end
+                            end
+                            if canGrow then rectH = rectH + 1 end
+                        end
+
+                        for dv = 0, rectH - 1 do
+                            for du = 0, rectW - 1 do
+                                local clearIdx = (vv + dv - vMin) * uCount + (u + du - uMin) + 1
+                                maskId[clearIdx] = nil
+                                maskAo[clearIdx] = nil
+                            end
+                        end
+
+                        setCoord(coord, normalAxis, w)
+                        setCoord(coord, uAxis, u)
+                        setCoord(coord, vAxis, vv)
+                        sizes[1], sizes[2], sizes[3] = 1, 1, 1
+                        sizes[uAxis] = rectW
+                        sizes[vAxis] = rectH
+                        vCount, iCount, vIndex = addMergedFace(
+                            world, palette, verts, idxs, faceIndex,
+                            coord[1], coord[2], coord[3], sizes,
+                            vCount, iCount, vIndex)
+                        u = u + rectW
+                    else
+                        u = u + 1
                     end
                 end
             end
@@ -250,6 +383,7 @@ function ChunkManager:regenerateChunk(chunk)
     chunk.vertexCount = vCount
     chunk.indexCount  = iCount
     chunk.dirty = false
+    self.dirtyChunks[self:chunkKey(chunk.cx, chunk.cy, chunk.cz)] = nil
 
     if vCount == 0 then
         chunk.mesh = nil
@@ -269,7 +403,10 @@ end
 -- Force every chunk to rebuild on the next flush. Used after bulk world
 -- mutations (e.g. importing a level) where per-cell markDirty would be wasteful.
 function ChunkManager:markAllDirty()
-    for _, chunk in pairs(self.chunks) do chunk.dirty = true end
+    for key, chunk in pairs(self.chunks) do
+        chunk.dirty = true
+        self.dirtyChunks[key] = true
+    end
 end
 
 -- Move the sun. Re-bakes every chunk mesh (lighting lives in vertex colors),
@@ -284,9 +421,12 @@ function ChunkManager:setSun(x, y, z)
 end
 
 function ChunkManager:flushDirty()
-    for _, chunk in pairs(self.chunks) do
-        if chunk.dirty then
+    for key in pairs(self.dirtyChunks) do
+        local chunk = self.chunks[key]
+        if chunk and chunk.dirty then
             self:regenerateChunk(chunk)
+        else
+            self.dirtyChunks[key] = nil
         end
     end
 end
